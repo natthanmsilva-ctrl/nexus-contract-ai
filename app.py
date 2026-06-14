@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 import pandas as pd
+import sqlite3
 import streamlit as st
 import pdfplumber
 import pytesseract
@@ -548,6 +549,22 @@ def as_float_score(value: Any) -> float:
         return float(str(value).replace(",", "."))
     except Exception:
         return 0.0
+
+def carregar_contratos_chat():
+    try:
+        conn = sqlite3.connect("nexus_contract.db")
+
+        df = pd.read_sql("""
+            SELECT *
+            FROM contratos
+        """, conn)
+
+        conn.close()
+
+        return df
+
+    except Exception:
+        return pd.DataFrame()
 
 
 # =========================================================
@@ -1873,10 +1890,15 @@ with st.sidebar:
     abrir_dashboard = bool(st.query_params.get("risco")) or query_pagina == "dashboard"
 
     pagina = st.radio(
-        "Menu",
-        ["🏠 Dashboard", "📄 Nova Análise", "📚 Histórico"],
-        index=0 if abrir_dashboard else 1,
-    )
+    "Menu",
+    [
+        "🏠 Dashboard",
+        "📄 Nova Análise",
+        "📚 Histórico",
+        "🤖 Assistente IA"
+    ],
+    index=0 if abrir_dashboard else 1,
+)
 
     st.divider()
 
@@ -1974,6 +1996,109 @@ if pagina == "🏠 Dashboard":
     else:
         for _, row in historico_filtrado.head(10).iterrows():
             render_contract_card(row)
+
+# =========================================================
+# ASSISTENTE IA
+# =========================================================
+if pagina == "🤖 Assistente IA":
+
+    render_hero(
+        "Assistente Nexus",
+        "Converse com todos os contratos armazenados no banco."
+    )
+
+    contratos = carregar_contratos_chat()
+
+    if contratos.empty:
+        st.warning("Nenhum contrato encontrado no banco.")
+        st.stop()
+
+    pergunta = st.chat_input(
+        "Pergunte algo sobre os contratos..."
+    )
+
+    if pergunta:
+
+        pergunta_lower = pergunta.lower()
+
+        resposta = "Não encontrei informações."
+
+        try:
+
+            if "quantos contratos" in pergunta_lower:
+
+                resposta = (
+                    f"Existem {len(contratos)} contratos cadastrados."
+                )
+
+            elif "risco alto" in pergunta_lower:
+
+                alto = contratos[
+                    contratos["risco"]
+                    .astype(str)
+                    .str.upper()
+                    == "ALTO"
+                ]
+
+                if len(alto):
+
+                    resposta = "\n".join(
+                        alto["fornecedor"]
+                        .fillna("Sem nome")
+                        .astype(str)
+                        .tolist()
+                    )
+
+                else:
+
+                    resposta = (
+                        "Nenhum contrato de risco alto encontrado."
+                    )
+
+            elif "maior valor" in pergunta_lower:
+
+                contratos["valor_num"] = (
+                    contratos["valor_total"]
+                    .astype(str)
+                    .str.replace("R$", "", regex=False)
+                    .str.replace(".", "", regex=False)
+                    .str.replace(",", ".", regex=False)
+                )
+
+                contratos["valor_num"] = pd.to_numeric(
+                    contratos["valor_num"],
+                    errors="coerce"
+                )
+
+                maior = contratos.sort_values(
+                    "valor_num",
+                    ascending=False
+                ).iloc[0]
+
+                resposta = f"""
+Fornecedor: {maior['fornecedor']}
+
+Valor: {maior['valor_total']}
+"""
+
+            elif "score médio" in pergunta_lower:
+
+                score = pd.to_numeric(
+                    contratos["score"],
+                    errors="coerce"
+                )
+
+                resposta = (
+                    f"Score médio: {round(score.mean(),1)}"
+                )
+
+        except Exception as erro:
+
+            resposta = f"Erro ao consultar banco: {erro}"
+
+        st.chat_message("user").write(pergunta)
+
+        st.chat_message("assistant").write(resposta)
 
     st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
