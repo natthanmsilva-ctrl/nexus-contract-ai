@@ -2355,8 +2355,8 @@ if pagina == "🤖 Assistente IA":
                 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos Assinados**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Não assinados
@@ -2365,17 +2365,18 @@ if pagina == "🤖 Assistente IA":
                 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos Sem Assinatura**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Projuris
             elif texto_tem(pergunta_lower, ["projuris"]):
                 filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
+                
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos encontrados**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Ariba
@@ -2384,8 +2385,8 @@ if pagina == "🤖 Assistente IA":
                 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos Ariba**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Gemini
@@ -2394,8 +2395,8 @@ if pagina == "🤖 Assistente IA":
                 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos analisados pelo Gemini**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Últimos contratos
@@ -2404,8 +2405,8 @@ if pagina == "🤖 Assistente IA":
 
                 resposta = (
                     resumo_executivo_busca(ultimos)
-                    + "📋 **Últimos contratos analisados**\n\n"
                     + listar_fornecedores(ultimos)
+                    + "</div>"
                 )
 
             # Buscar fornecedor específico
@@ -2436,8 +2437,8 @@ if pagina == "🤖 Assistente IA":
                 if not resultado_busca.empty:
                     resposta = (
                         resumo_executivo_busca(resultado_busca)
-                        + f"🔎 **Resultado da busca: {pergunta}**\n\n"
                         + listar_fornecedores(resultado_busca, limite=50)
+                        + "</div>"
                     )
                 else:
                     resposta = (
