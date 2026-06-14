@@ -1991,13 +1991,13 @@ if pagina == "🏠 Dashboard":
         st.stop()
 
 # =========================================================
-# ASSISTENTE IA
+# ASSISTENTE IA LOCAL
 # =========================================================
 if pagina == "🤖 Assistente IA":
 
     render_hero(
         "Assistente Nexus",
-        "Converse com todos os contratos armazenados no banco."
+        "Consulte informações dos contratos analisados no sistema."
     )
 
     contratos = carregar_contratos_chat()
@@ -2006,91 +2006,173 @@ if pagina == "🤖 Assistente IA":
         st.warning("Nenhum contrato encontrado no banco.")
         st.stop()
 
-    pergunta = st.chat_input(
-        "Pergunte algo sobre os contratos..."
+    st.markdown('<div class="section-title">Perguntas rápidas</div>', unsafe_allow_html=True)
+
+    exemplos = [
+        "Quantos contratos existem?",
+        "Quais contratos são de risco alto?",
+        "Quais contratos são de risco médio?",
+        "Quais contratos são de risco baixo?",
+        "Qual contrato tem maior valor?",
+        "Qual contrato tem menor score?",
+        "Qual é o score médio?",
+        "Quais contratos estão assinados?",
+        "Quais contratos não estão assinados?",
+        "Quais contratos são do Projuris?",
+        "Quais contratos são do Ariba?",
+        "Quais contratos foram analisados pelo Gemini?",
+        "Liste os últimos contratos analisados",
+    ]
+
+    pergunta_exemplo = st.selectbox(
+        "Escolha uma pergunta pronta",
+        [""] + exemplos
     )
 
+    pergunta_digitada = st.chat_input("Ou digite sua pergunta sobre os contratos...")
+
+    pergunta = pergunta_digitada or pergunta_exemplo
+
+    def texto_tem(texto, palavras):
+        texto = str(texto).lower()
+        return any(p in texto for p in palavras)
+
+    def listar_fornecedores(df, limite=10):
+        if df.empty:
+            return "Nenhum contrato encontrado."
+        linhas = []
+        for _, r in df.head(limite).iterrows():
+            linhas.append(
+                f"• {r.get('fornecedor', 'Não informado')} | "
+                f"Risco: {r.get('risco', 'N/A')} | "
+                f"Score: {r.get('score', 'N/A')} | "
+                f"Valor: {r.get('valor_total', 'Não informado')}"
+            )
+        return "\n".join(linhas)
+
     if pergunta:
-
         pergunta_lower = pergunta.lower()
-
-        resposta = "Não encontrei informações."
+        resposta = "Não consegui identificar a pergunta. Use uma das perguntas rápidas ou tente escrever de outra forma."
 
         try:
+            df = contratos.copy()
 
-            if "quantos contratos" in pergunta_lower:
+            df["risco_norm"] = df["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+            df["score_num"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
 
+            df["valor_num"] = (
+                df["valor_total"]
+                .astype(str)
+                .str.replace("R$", "", regex=False)
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
+            )
+            df["valor_num"] = pd.to_numeric(df["valor_num"], errors="coerce").fillna(0)
+
+            # Saudação
+            if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
                 resposta = (
-                    f"Existem {len(contratos)} contratos cadastrados."
+                    "Olá! Eu sou o Assistente Nexus. "
+                    "Posso consultar quantidade de contratos, riscos, scores, valores, origem, assinatura e histórico das análises."
                 )
 
-            elif "risco alto" in pergunta_lower:
+            # Quantidade total
+            elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
+                resposta = f"Existem {len(df)} contrato(s) cadastrados no histórico."
 
-                alto = contratos[
-                    contratos["risco"]
-                    .astype(str)
-                    .str.upper()
-                    == "ALTO"
-                ]
+            # Risco alto
+            elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
+                filtro = df[df["risco_norm"] == "ALTO"]
+                resposta = f"Encontrei {len(filtro)} contrato(s) de risco ALTO.\n\n{listar_fornecedores(filtro)}"
 
-                if len(alto):
+            # Risco médio
+            elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
+                filtro = df[df["risco_norm"] == "MÉDIO"]
+                resposta = f"Encontrei {len(filtro)} contrato(s) de risco MÉDIO.\n\n{listar_fornecedores(filtro)}"
 
-                    resposta = "\n".join(
-                        alto["fornecedor"]
-                        .fillna("Sem nome")
-                        .astype(str)
-                        .tolist()
-                    )
+            # Risco baixo
+            elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
+                filtro = df[df["risco_norm"] == "BAIXO"]
+                resposta = f"Encontrei {len(filtro)} contrato(s) de risco BAIXO.\n\n{listar_fornecedores(filtro)}"
 
-                else:
-
-                    resposta = (
-                        "Nenhum contrato de risco alto encontrado."
-                    )
-
-            elif "maior valor" in pergunta_lower:
-
-                contratos["valor_num"] = (
-                    contratos["valor_total"]
-                    .astype(str)
-                    .str.replace("R$", "", regex=False)
-                    .str.replace(".", "", regex=False)
-                    .str.replace(",", ".", regex=False)
-                )
-
-                contratos["valor_num"] = pd.to_numeric(
-                    contratos["valor_num"],
-                    errors="coerce"
-                )
-
-                maior = contratos.sort_values(
-                    "valor_num",
-                    ascending=False
-                ).iloc[0]
-
-                resposta = f"""
-Fornecedor: {maior['fornecedor']}
-
-Valor: {maior['valor_total']}
-"""
-
-            elif "score médio" in pergunta_lower:
-
-                score = pd.to_numeric(
-                    contratos["score"],
-                    errors="coerce"
-                )
-
+            # Maior valor
+            elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
+                maior = df.sort_values("valor_num", ascending=False).iloc[0]
                 resposta = (
-                    f"Score médio: {round(score.mean(),1)}"
+                    f"Contrato com maior valor:\n\n"
+                    f"• Fornecedor: {maior.get('fornecedor', 'Não informado')}\n"
+                    f"• Valor: {maior.get('valor_total', 'Não informado')}\n"
+                    f"• Risco: {maior.get('risco', 'N/A')}\n"
+                    f"• Score: {maior.get('score', 'N/A')}"
                 )
+
+            # Menor score
+            elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
+                menor = df.sort_values("score_num", ascending=True).iloc[0]
+                resposta = (
+                    f"Contrato com menor score:\n\n"
+                    f"• Fornecedor: {menor.get('fornecedor', 'Não informado')}\n"
+                    f"• Score: {menor.get('score', 'N/A')}\n"
+                    f"• Risco: {menor.get('risco', 'N/A')}\n"
+                    f"• Valor: {menor.get('valor_total', 'Não informado')}"
+                )
+
+            # Maior score
+            elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
+                maior_score = df.sort_values("score_num", ascending=False).iloc[0]
+                resposta = (
+                    f"Contrato com maior score:\n\n"
+                    f"• Fornecedor: {maior_score.get('fornecedor', 'Não informado')}\n"
+                    f"• Score: {maior_score.get('score', 'N/A')}\n"
+                    f"• Risco: {maior_score.get('risco', 'N/A')}\n"
+                    f"• Valor: {maior_score.get('valor_total', 'Não informado')}"
+                )
+
+            # Score médio
+            elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
+                resposta = f"O score médio dos contratos é {round(df['score_num'].mean(), 1)}."
+
+            # Assinados
+            elif texto_tem(pergunta_lower, ["contratos assinados", "assinados", "com assinatura"]):
+                filtro = df[df["contrato_assinado"].astype(str).str.upper() == "SIM"]
+                resposta = f"Encontrei {len(filtro)} contrato(s) assinados.\n\n{listar_fornecedores(filtro)}"
+
+            # Não assinados
+            elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados"]):
+                filtro = df[df["contrato_assinado"].astype(str).str.upper() != "SIM"]
+                resposta = f"Encontrei {len(filtro)} contrato(s) sem assinatura confirmada.\n\n{listar_fornecedores(filtro)}"
+
+            # Projuris
+            elif texto_tem(pergunta_lower, ["projuris"]):
+                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
+                resposta = f"Encontrei {len(filtro)} contrato(s) com origem Projuris.\n\n{listar_fornecedores(filtro)}"
+
+            # Ariba
+            elif texto_tem(pergunta_lower, ["ariba"]):
+                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
+                resposta = f"Encontrei {len(filtro)} contrato(s) com origem Ariba.\n\n{listar_fornecedores(filtro)}"
+
+            # Gemini
+            elif texto_tem(pergunta_lower, ["gemini", "ia", "inteligência artificial", "inteligencia artificial"]):
+                filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
+                resposta = f"Encontrei {len(filtro)} contrato(s) analisados com Gemini.\n\n{listar_fornecedores(filtro)}"
+
+            # Últimos contratos
+            elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises"]):
+                resposta = "Últimos contratos analisados:\n\n" + listar_fornecedores(df.head(10))
+
+            # Buscar fornecedor específico
+            else:
+                busca = pergunta_lower.replace("contrato", "").replace("fornecedor", "").strip()
+                filtro = df[df["fornecedor"].astype(str).str.lower().str.contains(busca, na=False)]
+
+                if not filtro.empty:
+                    resposta = f"Encontrei {len(filtro)} contrato(s) relacionado(s) à busca:\n\n{listar_fornecedores(filtro)}"
 
         except Exception as erro:
-
-            resposta = f"Erro ao consultar banco: {erro}"
+            resposta = f"Erro ao consultar o histórico: {erro}"
 
         st.chat_message("user").write(pergunta)
-
         st.chat_message("assistant").write(resposta)
 
     st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
