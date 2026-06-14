@@ -2037,50 +2037,220 @@ if pagina == "🤖 Assistente IA":
         texto = str(texto).lower()
         return any(p in texto for p in palavras)
 
-    def listar_fornecedores(df, limite=10):
-        if df.empty:
-            return "Nenhum contrato encontrado."
+    st.markdown("""
+    <style>
 
-        linhas = []
+    .nexus-ai-box{
+        background:linear-gradient(145deg,#101821,#0b1118);
+        border-radius:18px;
+        padding:25px;
+        margin-top:20px;
+    }
+
+    .ai-summary-grid{
+        display:grid;
+        grid-template-columns:repeat(5,1fr);
+        gap:15px;
+        margin-bottom:25px;
+    }
+
+    .ai-summary-card{
+        background:#151d28;
+        border-radius:12px;
+        padding:18px;
+    }
+
+    .ai-summary-card small{
+        color:#cbd5e1;
+    }
+
+    .ai-summary-card strong{
+        display:block;
+        color:white;
+        font-size:28px;
+        margin-top:8px;
+    }
+
+    .ai-contract-card{
+        background:#151d28;
+        border-radius:16px;
+        padding:20px;
+        margin-bottom:15px;
+        border-left:6px solid var(--risk-color);
+    }
+
+    .ai-contract-title{
+        font-size:20px;
+        font-weight:800;
+        color:white;
+    }
+
+    .ai-risk{
+        margin-top:10px;
+        margin-bottom:15px;
+        display:inline-block;
+        padding:5px 12px;
+        border-radius:20px;
+        background:var(--risk-bg);
+        color:var(--risk-color);
+        font-size:12px;
+        font-weight:800;
+    }
+
+    .ai-contract-grid{
+        display:grid;
+        grid-template-columns:repeat(5,1fr);
+        gap:15px;
+    }
+
+    .ai-info-label{
+        color:#94a3b8;
+        font-size:11px;
+        text-transform:uppercase;
+    }
+
+    .ai-info-value{
+        color:white;
+        font-weight:700;
+        margin-top:5px;
+    }
+
+    </style>
+    """, unsafe_allow_html=True)
+
+    def listar_fornecedores(df, limite=10):
+
+        html = ""
 
         for _, r in df.head(limite).iterrows():
-            risco = str(r.get("risco", "N/A")).upper()
-            emoji = "🔴" if risco == "ALTO" else "🟠" if risco in ["MÉDIO", "MEDIO"] else "🟢"
 
-            linhas.append(
-                f"""
-    {emoji} **{r.get('fornecedor', 'Não informado')}**
+            risco = str(r.get("risco","")).upper()
 
-    • **CNPJ:** {r.get('cnpj', 'Não informado')}  
-    • **Risco:** {r.get('risco', 'N/A')}  
-    • **Score:** {r.get('score', 'N/A')}  
-    • **Valor:** {r.get('valor_total', 'Não informado')}  
-    • **Status:** {r.get('status', 'Não informado')}  
-    • **Origem:** {r.get('tipo_origem', 'Não informado')}  
-    """
-            )
+            if risco == "ALTO":
+                cor = "#ff4d4d"
+                fundo = "rgba(255,77,77,.15)"
 
-        return "\n---\n".join(linhas)
+            elif risco in ["MÉDIO","MEDIO"]:
+                cor = "#f59e0b"
+                fundo = "rgba(245,158,11,.15)"
+
+            else:
+                cor = "#22c55e"
+                fundo = "rgba(34,197,94,.15)"
+
+            html += f"""
+            <div class="ai-contract-card"
+                style="--risk-color:{cor};
+                        --risk-bg:{fundo};">
+
+                <div class="ai-contract-title">
+                    {r.get("fornecedor","Não informado")}
+                </div>
+
+                <div class="ai-risk">
+                    RISCO {r.get("risco","N/A")}
+                </div>
+
+                <div class="ai-contract-grid">
+
+                    <div>
+                        <div class="ai-info-label">CNPJ</div>
+                        <div class="ai-info-value">
+                            {r.get("cnpj","")}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="ai-info-label">Score</div>
+                        <div class="ai-info-value">
+                            {r.get("score","")}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="ai-info-label">Valor</div>
+                        <div class="ai-info-value">
+                            {r.get("valor_total","")}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="ai-info-label">Status</div>
+                        <div class="ai-info-value">
+                            {r.get("status","")}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="ai-info-label">Origem</div>
+                        <div class="ai-info-value">
+                            {r.get("tipo_origem","")}
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+            """
+
+        return html
     
     def resumo_executivo_busca(df):
+
         if df.empty:
             return ""
 
-        score_medio = round(pd.to_numeric(df["score"], errors="coerce").fillna(0).mean(), 1)
-
-        riscos = df["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
-        alto = int((riscos == "ALTO").sum())
-        medio = int((riscos == "MÉDIO").sum())
-        baixo = int((riscos == "BAIXO").sum())
-
-        return (
-            f"📊 **Resumo executivo**\n\n"
-            f"• **Contratos encontrados:** {len(df)}\n"
-            f"• **Score médio:** {score_medio}\n"
-            f"• **Risco alto:** {alto}\n"
-            f"• **Risco médio:** {medio}\n"
-            f"• **Risco baixo:** {baixo}\n\n"
+        score = round(
+            pd.to_numeric(df["score"], errors="coerce")
+            .fillna(0)
+            .mean(),
+            1
         )
+
+        riscos = (
+            df["risco"]
+            .astype(str)
+            .str.upper()
+            .replace({"MEDIO":"MÉDIO"})
+        )
+
+        alto = (riscos=="ALTO").sum()
+        medio = (riscos=="MÉDIO").sum()
+        baixo = (riscos=="BAIXO").sum()
+
+        return f"""
+        <div class="nexus-ai-box">
+
+            <h3>📊 Resumo Executivo</h3>
+
+            <div class="ai-summary-grid">
+
+                <div class="ai-summary-card">
+                    <small>Contratos</small>
+                    <strong>{len(df)}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Score Médio</small>
+                    <strong>{score}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Alto</small>
+                    <strong>{alto}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Médio</small>
+                    <strong>{medio}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Baixo</small>
+                    <strong>{baixo}</strong>
+                </div>
+
+            </div>
+        """
 
     if pergunta:
         pergunta_lower = pergunta.lower()
@@ -2118,8 +2288,8 @@ if pagina == "🤖 Assistente IA":
 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos de Risco Alto**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Risco médio
@@ -2128,8 +2298,8 @@ if pagina == "🤖 Assistente IA":
                 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos de Risco Médio**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Risco baixo
@@ -2138,8 +2308,8 @@ if pagina == "🤖 Assistente IA":
                 
                 resposta = (
                     resumo_executivo_busca(filtro)
-                    + "📋 **Contratos de Risco Baixo**\n\n"
                     + listar_fornecedores(filtro)
+                    + "</div>"
                 )
 
             # Maior valor
@@ -2287,7 +2457,10 @@ if pagina == "🤖 Assistente IA":
             resposta = f"Erro ao consultar o histórico: {erro}"
 
         st.chat_message("user").write(pergunta)
-        st.chat_message("assistant").write(resposta)
+        st.chat_message("assistant").markdown(
+            resposta,
+            unsafe_allow_html=True
+        )
 
     st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
