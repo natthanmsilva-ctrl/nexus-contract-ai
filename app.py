@@ -2040,15 +2040,47 @@ if pagina == "🤖 Assistente IA":
     def listar_fornecedores(df, limite=10):
         if df.empty:
             return "Nenhum contrato encontrado."
+
         linhas = []
+
         for _, r in df.head(limite).iterrows():
+            risco = str(r.get("risco", "N/A")).upper()
+            emoji = "🔴" if risco == "ALTO" else "🟠" if risco in ["MÉDIO", "MEDIO"] else "🟢"
+
             linhas.append(
-                f"• {r.get('fornecedor', 'Não informado')} | "
-                f"Risco: {r.get('risco', 'N/A')} | "
-                f"Score: {r.get('score', 'N/A')} | "
-                f"Valor: {r.get('valor_total', 'Não informado')}"
+                f"""
+    {emoji} **{r.get('fornecedor', 'Não informado')}**
+
+    • **CNPJ:** {r.get('cnpj', 'Não informado')}  
+    • **Risco:** {r.get('risco', 'N/A')}  
+    • **Score:** {r.get('score', 'N/A')}  
+    • **Valor:** {r.get('valor_total', 'Não informado')}  
+    • **Status:** {r.get('status', 'Não informado')}  
+    • **Origem:** {r.get('tipo_origem', 'Não informado')}  
+    """
             )
-        return "\n".join(linhas)
+
+        return "\n---\n".join(linhas)
+    
+    def resumo_executivo_busca(df):
+        if df.empty:
+            return ""
+
+        score_medio = round(pd.to_numeric(df["score"], errors="coerce").fillna(0).mean(), 1)
+
+        riscos = df["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+        alto = int((riscos == "ALTO").sum())
+        medio = int((riscos == "MÉDIO").sum())
+        baixo = int((riscos == "BAIXO").sum())
+
+        return (
+            f"📊 **Resumo executivo**\n\n"
+            f"• **Contratos encontrados:** {len(df)}\n"
+            f"• **Score médio:** {score_medio}\n"
+            f"• **Risco alto:** {alto}\n"
+            f"• **Risco médio:** {medio}\n"
+            f"• **Risco baixo:** {baixo}\n\n"
+        )
 
     if pergunta:
         pergunta_lower = pergunta.lower()
@@ -2083,17 +2115,32 @@ if pagina == "🤖 Assistente IA":
             # Risco alto
             elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
                 filtro = df[df["risco_norm"] == "ALTO"]
-                resposta = f"Encontrei {len(filtro)} contrato(s) de risco ALTO.\n\n{listar_fornecedores(filtro)}"
+
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos de Risco Alto**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Risco médio
             elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
                 filtro = df[df["risco_norm"] == "MÉDIO"]
-                resposta = f"Encontrei {len(filtro)} contrato(s) de risco MÉDIO.\n\n{listar_fornecedores(filtro)}"
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos de Risco Médio**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Risco baixo
             elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
                 filtro = df[df["risco_norm"] == "BAIXO"]
-                resposta = f"Encontrei {len(filtro)} contrato(s) de risco BAIXO.\n\n{listar_fornecedores(filtro)}"
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos de Risco Baixo**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Maior valor
             elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
@@ -2135,31 +2182,61 @@ if pagina == "🤖 Assistente IA":
             # Assinados
             elif texto_tem(pergunta_lower, ["contratos assinados", "assinados", "com assinatura"]):
                 filtro = df[df["contrato_assinado"].astype(str).str.upper() == "SIM"]
-                resposta = f"Encontrei {len(filtro)} contrato(s) assinados.\n\n{listar_fornecedores(filtro)}"
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos Assinados**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Não assinados
             elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados"]):
                 filtro = df[df["contrato_assinado"].astype(str).str.upper() != "SIM"]
-                resposta = f"Encontrei {len(filtro)} contrato(s) sem assinatura confirmada.\n\n{listar_fornecedores(filtro)}"
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos Sem Assinatura**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Projuris
             elif texto_tem(pergunta_lower, ["projuris"]):
                 filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
-                resposta = f"Encontrei {len(filtro)} contrato(s) com origem Projuris.\n\n{listar_fornecedores(filtro)}"
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos encontrados**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Ariba
             elif texto_tem(pergunta_lower, ["ariba"]):
                 filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
-                resposta = f"Encontrei {len(filtro)} contrato(s) com origem Ariba.\n\n{listar_fornecedores(filtro)}"
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos Ariba**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Gemini
             elif texto_tem(pergunta_lower, ["gemini", "ia", "inteligência artificial", "inteligencia artificial"]):
                 filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
-                resposta = f"Encontrei {len(filtro)} contrato(s) analisados com Gemini.\n\n{listar_fornecedores(filtro)}"
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + "📋 **Contratos analisados pelo Gemini**\n\n"
+                    + listar_fornecedores(filtro)
+                )
 
             # Últimos contratos
             elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises"]):
-                resposta = "Últimos contratos analisados:\n\n" + listar_fornecedores(df.head(10))
+                ultimos = df.head(10)
+
+                resposta = (
+                    resumo_executivo_busca(ultimos)
+                    + "📋 **Últimos contratos analisados**\n\n"
+                    + listar_fornecedores(ultimos)
+                )
 
             # Buscar fornecedor específico
             else:
@@ -2188,7 +2265,8 @@ if pagina == "🤖 Assistente IA":
 
                 if not resultado_busca.empty:
                     resposta = (
-                        f"Encontrei {len(resultado_busca)} contrato(s) relacionado(s) à busca **{pergunta}**:\n\n"
+                        resumo_executivo_busca(resultado_busca)
+                        + f"🔎 **Resultado da busca: {pergunta}**\n\n"
                         + listar_fornecedores(resultado_busca, limite=50)
                     )
                 else:
