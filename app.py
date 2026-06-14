@@ -2163,8 +2163,39 @@ if pagina == "🤖 Assistente IA":
 
             # Buscar fornecedor específico
             else:
-                busca = pergunta_lower.replace("contrato", "").replace("fornecedor", "").strip()
-                filtro = df[df["fornecedor"].astype(str).str.lower().str.contains(busca, na=False)]
+                busca = pergunta_lower.strip()
+
+                colunas_busca = [
+                    "fornecedor",
+                    "cnpj",
+                    "valor_total",
+                    "vigencia",
+                    "status",
+                    "risco",
+                    "contrato_assinado",
+                    "modelo_ia",
+                    "tipo_origem",
+                    "arquivo",
+                ]
+
+                filtro = pd.Series(False, index=df.index)
+
+                for coluna in colunas_busca:
+                    if coluna in df.columns:
+                        filtro = filtro | df[coluna].astype(str).str.lower().str.contains(busca, na=False)
+
+                resultado_busca = df[filtro]
+
+                if not resultado_busca.empty:
+                    resposta = (
+                        f"Encontrei {len(resultado_busca)} contrato(s) relacionado(s) à busca **{pergunta}**:\n\n"
+                        + listar_fornecedores(resultado_busca)
+                    )
+                else:
+                    resposta = (
+                        "Não encontrei contratos relacionados a essa busca.\n\n"
+                        "Você pode pesquisar por fornecedor, CNPJ, risco, valor, origem, modelo IA ou nome do arquivo."
+                    )
 
                 if not filtro.empty:
                     resposta = f"Encontrei {len(filtro)} contrato(s) relacionado(s) à busca:\n\n{listar_fornecedores(filtro)}"
