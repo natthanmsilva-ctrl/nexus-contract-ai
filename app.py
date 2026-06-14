@@ -2189,16 +2189,21 @@ if pagina == "🤖 Assistente IA":
                 if not resultado_busca.empty:
                     resposta = (
                         f"Encontrei {len(resultado_busca)} contrato(s) relacionado(s) à busca **{pergunta}**:\n\n"
-                        + listar_fornecedores(resultado_busca)
+                        + listar_fornecedores(resultado_busca, limite=50)
                     )
                 else:
                     resposta = (
                         "Não encontrei contratos relacionados a essa busca.\n\n"
-                        "Você pode pesquisar por fornecedor, CNPJ, risco, valor, origem, modelo IA ou nome do arquivo."
+                        "Você pode pesquisar por:\n"
+                        "• Fornecedor\n"
+                        "• CNPJ\n"
+                        "• Valor\n"
+                        "• Risco\n"
+                        "• Status\n"
+                        "• Origem\n"
+                        "• Modelo IA\n"
+                        "• Nome do arquivo"
                     )
-
-                if not filtro.empty:
-                    resposta = f"Encontrei {len(filtro)} contrato(s) relacionado(s) à busca:\n\n{listar_fornecedores(filtro)}"
 
         except Exception as erro:
             resposta = f"Erro ao consultar o histórico: {erro}"
