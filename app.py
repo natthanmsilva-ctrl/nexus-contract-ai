@@ -1,3 +1,10 @@
+# =========================================================
+# NEXUS CONTRACT AI - VERSÃO REVISADA
+# Ajustes aplicados: visual profissional, carregamento seguro
+# do histórico, proteção de HTML no Assistente IA e refinamentos
+# de usabilidade sem alterar o fluxo principal.
+# =========================================================
+
 import io
 import os
 import re
@@ -476,6 +483,36 @@ section[data-testid="stSidebar"] *{
 [data-testid="stDataFrame"]{
     border-radius:16px;
     overflow:hidden;
+    border:1px solid rgba(215,191,117,.18);
+}
+
+.stTextInput input,
+.stTextArea textarea,
+.stSelectbox div[data-baseweb="select"] > div,
+.stMultiSelect div[data-baseweb="select"] > div{
+    border-radius:13px !important;
+    border:1px solid rgba(215,191,117,.24) !important;
+    background:#0b1118 !important;
+    color:#f8fafc !important;
+}
+
+.stFileUploader{
+    background:linear-gradient(145deg,rgba(16,24,34,.82),rgba(11,17,24,.82));
+    border:1px dashed rgba(215,191,117,.45);
+    border-radius:20px;
+    padding:14px;
+}
+
+button[kind="secondary"]{
+    transition:all .18s ease !important;
+}
+
+button[kind="secondary"]:hover{
+    transform:translateY(-1px);
+}
+
+[data-testid="stTabs"] button{
+    font-weight:900 !important;
 }
 
 .footer{
@@ -552,8 +589,19 @@ def as_float_score(value: Any) -> float:
 
 def carregar_contratos_chat():
     try:
-        return listar_analises()
+        df = listar_analises()
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     except Exception:
+        return pd.DataFrame()
+
+
+def carregar_historico_seguro() -> pd.DataFrame:
+    """Carrega o histórico sem derrubar a tela caso o banco esteja vazio ou inacessível."""
+    try:
+        df = listar_analises()
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    except Exception as erro:
+        st.error(f"Não foi possível carregar o histórico. Detalhe: {erro}")
         return pd.DataFrame()
 
 
@@ -1920,7 +1968,7 @@ with st.sidebar:
 if pagina == "🏠 Dashboard":
     render_hero("Dashboard", "Visão executiva das análises de contratos, riscos e pendências.")
 
-    historico = listar_analises()
+    historico = carregar_historico_seguro()
 
     col_a, col_b = st.columns([3, 1])
     with col_b:
@@ -2144,11 +2192,11 @@ if pagina == "🤖 Assistente IA":
                         --risk-bg:{fundo};">
 
                 <div class="ai-contract-title">
-                    {r.get("fornecedor","Não informado")}
+                    {safe(r.get("fornecedor","Não informado"))}
                 </div>
 
                 <div class="ai-risk">
-                    RISCO {r.get("risco","N/A")}
+                    RISCO {safe(r.get("risco","N/A"))}
                 </div>
 
                 <div class="ai-contract-grid">
@@ -2156,35 +2204,35 @@ if pagina == "🤖 Assistente IA":
                     <div>
                         <div class="ai-info-label">CNPJ</div>
                         <div class="ai-info-value">
-                            {r.get("cnpj","")}
+                            {safe(r.get("cnpj",""))}
                         </div>
                     </div>
 
                     <div>
                         <div class="ai-info-label">Score</div>
                         <div class="ai-info-value">
-                            {r.get("score","")}
+                            {safe(r.get("score",""))}
                         </div>
                     </div>
 
                     <div>
                         <div class="ai-info-label">Valor</div>
                         <div class="ai-info-value">
-                            {r.get("valor_total","")}
+                            {safe(r.get("valor_total",""))}
                         </div>
                     </div>
 
                     <div>
                         <div class="ai-info-label">Status</div>
                         <div class="ai-info-value">
-                            {r.get("status","")}
+                            {safe(r.get("status",""))}
                         </div>
                     </div>
 
                     <div>
                         <div class="ai-info-label">Origem</div>
                         <div class="ai-info-value">
-                            {r.get("tipo_origem","")}
+                            {safe(r.get("tipo_origem",""))}
                         </div>
                     </div>
 
@@ -2197,7 +2245,11 @@ if pagina == "🤖 Assistente IA":
     def resumo_executivo_busca(df):
 
         if df.empty:
-            return ""
+            return """
+        <div class="nexus-ai-box">
+            <h3>📊 Resumo Executivo</h3>
+            <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
+        """
 
         score = round(
             pd.to_numeric(df["score"], errors="coerce")
@@ -2626,7 +2678,7 @@ if pagina == "📄 Nova Análise":
 if pagina == "📚 Histórico":
     render_hero("Histórico", "Consulta executiva dos contratos analisados, com filtros, indicadores e relatórios.")
 
-    historico = listar_analises()
+    historico = carregar_historico_seguro()
 
     if historico.empty:
         st.info("Nenhuma análise salva ainda.")
