@@ -552,17 +552,7 @@ def as_float_score(value: Any) -> float:
 
 def carregar_contratos_chat():
     try:
-        conn = sqlite3.connect("nexus_contract.db")
-
-        df = pd.read_sql("""
-            SELECT *
-            FROM contratos
-        """, conn)
-
-        conn.close()
-
-        return df
-
+        return listar_analises()
     except Exception:
         return pd.DataFrame()
 
@@ -1996,6 +1986,9 @@ if pagina == "🏠 Dashboard":
     else:
         for _, row in historico_filtrado.head(10).iterrows():
             render_contract_card(row)
+
+        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+        st.stop()
 
 # =========================================================
 # ASSISTENTE IA
