@@ -2045,13 +2045,14 @@ if pagina == "🤖 Assistente IA":
 
     render_hero(
         "Assistente Nexus",
-        "Consulte informações dos contratos analisados no sistema."
+        "Consulte informações dos contratos analisados no sistema de forma simples, visual e executiva."
     )
 
     contratos = carregar_contratos_chat()
 
     if contratos.empty:
         st.warning("Nenhum contrato encontrado no banco.")
+        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
     st.markdown('<div class="section-title">Perguntas rápidas</div>', unsafe_allow_html=True)
@@ -2074,446 +2075,201 @@ if pagina == "🤖 Assistente IA":
 
     pergunta_exemplo = st.selectbox(
         "Escolha uma pergunta pronta",
-        [""] + exemplos
+        [""] + exemplos,
     )
 
     pergunta_digitada = st.chat_input("Ou digite sua pergunta sobre os contratos...")
-
     pergunta = pergunta_digitada or pergunta_exemplo
 
-    def texto_tem(texto, palavras):
+    def texto_tem(texto: str, palavras: List[str]) -> bool:
         texto = str(texto).lower()
         return any(p in texto for p in palavras)
 
-    st.markdown("""
-    <style>
+    def preparar_df_chat(df: pd.DataFrame) -> pd.DataFrame:
+        base = df.copy()
+        colunas_padrao = [
+            "fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco",
+            "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise"
+        ]
+        for col in colunas_padrao:
+            if col not in base.columns:
+                base[col] = "Não informado"
 
-    .nexus-ai-box{
-        background:linear-gradient(145deg,#101821,#0b1118);
-        border-radius:18px;
-        padding:25px;
-        margin-top:20px;
-    }
-
-    .ai-summary-grid{
-        display:grid;
-        grid-template-columns:repeat(5,1fr);
-        gap:15px;
-        margin-bottom:25px;
-    }
-
-    .ai-summary-card{
-        background:#151d28;
-        border-radius:12px;
-        padding:18px;
-    }
-
-    .ai-summary-card small{
-        color:#cbd5e1;
-    }
-
-    .ai-summary-card strong{
-        display:block;
-        color:white;
-        font-size:28px;
-        margin-top:8px;
-    }
-
-    .ai-contract-card{
-        background:#151d28;
-        border-radius:16px;
-        padding:20px;
-        margin-bottom:15px;
-        border-left:6px solid var(--risk-color);
-    }
-
-    .ai-contract-title{
-        font-size:20px;
-        font-weight:800;
-        color:white;
-    }
-
-    .ai-risk{
-        margin-top:10px;
-        margin-bottom:15px;
-        display:inline-block;
-        padding:5px 12px;
-        border-radius:20px;
-        background:var(--risk-bg);
-        color:var(--risk-color);
-        font-size:12px;
-        font-weight:800;
-    }
-
-    .ai-contract-grid{
-        display:grid;
-        grid-template-columns:repeat(5,1fr);
-        gap:15px;
-    }
-
-    .ai-info-label{
-        color:#94a3b8;
-        font-size:11px;
-        text-transform:uppercase;
-    }
-
-    .ai-info-value{
-        color:white;
-        font-weight:700;
-        margin-top:5px;
-    }
-
-    </style>
-    """, unsafe_allow_html=True)
-
-    def listar_fornecedores(df, limite=10):
-
-        html = ""
-
-        for _, r in df.head(limite).iterrows():
-
-            risco = str(r.get("risco","")).upper()
-
-            if risco == "ALTO":
-                cor = "#ff4d4d"
-                fundo = "rgba(255,77,77,.15)"
-
-            elif risco in ["MÉDIO","MEDIO"]:
-                cor = "#f59e0b"
-                fundo = "rgba(245,158,11,.15)"
-
-            else:
-                cor = "#22c55e"
-                fundo = "rgba(34,197,94,.15)"
-
-            html += f"""
-            <div class="ai-contract-card"
-                style="--risk-color:{cor};
-                        --risk-bg:{fundo};">
-
-                <div class="ai-contract-title">
-                    {safe(r.get("fornecedor","Não informado"))}
-                </div>
-
-                <div class="ai-risk">
-                    RISCO {safe(r.get("risco","N/A"))}
-                </div>
-
-                <div class="ai-contract-grid">
-
-                    <div>
-                        <div class="ai-info-label">CNPJ</div>
-                        <div class="ai-info-value">
-                            {safe(r.get("cnpj",""))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="ai-info-label">Score</div>
-                        <div class="ai-info-value">
-                            {safe(r.get("score",""))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="ai-info-label">Valor</div>
-                        <div class="ai-info-value">
-                            {safe(r.get("valor_total",""))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="ai-info-label">Status</div>
-                        <div class="ai-info-value">
-                            {safe(r.get("status",""))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="ai-info-label">Origem</div>
-                        <div class="ai-info-value">
-                            {safe(r.get("tipo_origem",""))}
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-            """
-
-        return html
-    
-    def resumo_executivo_busca(df):
-
-        if df.empty:
-            return """
-        <div class="nexus-ai-box">
-            <h3>📊 Resumo Executivo</h3>
-            <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
-        """
-
-        score = round(
-            pd.to_numeric(df["score"], errors="coerce")
-            .fillna(0)
-            .mean(),
-            1
-        )
-
-        riscos = (
-            df["risco"]
+        base["risco_norm"] = base["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+        base["score_num"] = pd.to_numeric(base["score"], errors="coerce").fillna(0)
+        base["valor_num"] = (
+            base["valor_total"]
             .astype(str)
-            .str.upper()
-            .replace({"MEDIO":"MÉDIO"})
+            .str.replace("R$", "", regex=False)
+            .str.replace(".", "", regex=False)
+            .str.replace(",", ".", regex=False)
         )
+        base["valor_num"] = pd.to_numeric(base["valor_num"], errors="coerce").fillna(0)
+        return base
 
-        alto = (riscos=="ALTO").sum()
-        medio = (riscos=="MÉDIO").sum()
-        baixo = (riscos=="BAIXO").sum()
+    def render_ai_resumo(df_resultado: pd.DataFrame) -> None:
+        if df_resultado.empty:
+            st.info("Nenhum contrato encontrado para esta busca.")
+            return
 
-        return f"""
-        <div class="nexus-ai-box">
+        riscos = df_resultado["risco_norm"].astype(str)
+        score_medio = round(float(df_resultado["score_num"].mean()), 1) if len(df_resultado) else 0
+        alto = int((riscos == "ALTO").sum())
+        medio = int((riscos == "MÉDIO").sum())
+        baixo = int((riscos == "BAIXO").sum())
 
-            <h3>📊 Resumo Executivo</h3>
+        st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
+        a1, a2, a3, a4, a5 = st.columns(5)
+        a1.markdown(render_metric("Contratos", len(df_resultado)), unsafe_allow_html=True)
+        a2.markdown(render_metric("Score médio", score_medio), unsafe_allow_html=True)
+        a3.markdown(render_metric("Risco alto", alto), unsafe_allow_html=True)
+        a4.markdown(render_metric("Risco médio", medio), unsafe_allow_html=True)
+        a5.markdown(render_metric("Risco baixo", baixo), unsafe_allow_html=True)
 
-            <div class="ai-summary-grid">
+    def render_ai_cards(df_resultado: pd.DataFrame, limite: int = 10) -> None:
+        if df_resultado.empty:
+            return
 
-                <div class="ai-summary-card">
-                    <small>Contratos</small>
-                    <strong>{len(df)}</strong>
-                </div>
+        st.markdown('<div class="section-title">Contratos encontrados</div>', unsafe_allow_html=True)
+        for _, r in df_resultado.head(limite).iterrows():
+            risco = normalize_risco(r.get("risco"))
+            cor = risco_cor(risco)
+            with st.container(border=True):
+                topo1, topo2 = st.columns([5, 1])
+                with topo1:
+                    st.markdown(f"### 📄 {safe(r.get('fornecedor', 'Não informado'))}", unsafe_allow_html=True)
+                    st.caption(str(r.get("arquivo") or "Não informado"))
+                with topo2:
+                    st.markdown(
+                        f"""
+                        <div style="text-align:center;background:{cor};color:white;
+                        padding:10px 14px;border-radius:999px;font-weight:900;font-size:12px;">
+                            {safe(risco)}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-                <div class="ai-summary-card">
-                    <small>Score Médio</small>
-                    <strong>{score}</strong>
-                </div>
+                c1, c2, c3, c4, c5 = st.columns([1.2, 1.1, 1.2, .8, 1])
+                c1.markdown(f"**CNPJ**  \n{safe(r.get('cnpj'))}", unsafe_allow_html=True)
+                c2.markdown(f"**Score**  \n{safe(r.get('score'))}", unsafe_allow_html=True)
+                c3.markdown(f"**Valor**  \n{safe(r.get('valor_total'))}", unsafe_allow_html=True)
+                c4.markdown(f"**Assinado**  \n{safe(r.get('contrato_assinado'))}", unsafe_allow_html=True)
+                c5.markdown(f"**Origem**  \n{safe(r.get('tipo_origem'))}", unsafe_allow_html=True)
 
-                <div class="ai-summary-card">
-                    <small>Alto</small>
-                    <strong>{alto}</strong>
-                </div>
+                c6, c7 = st.columns([1.4, 2])
+                c6.markdown(f"**Status**  \n{safe(r.get('status'))}", unsafe_allow_html=True)
+                c7.markdown(f"**Vigência**  \n{safe(r.get('vigencia'))}", unsafe_allow_html=True)
 
-                <div class="ai-summary-card">
-                    <small>Médio</small>
-                    <strong>{medio}</strong>
-                </div>
+        if len(df_resultado) > limite:
+            st.info(f"Exibindo {limite} de {len(df_resultado)} contrato(s) encontrados.")
 
-                <div class="ai-summary-card">
-                    <small>Baixo</small>
-                    <strong>{baixo}</strong>
-                </div>
+    def render_ai_destaque(titulo: str, row: pd.Series) -> None:
+        st.markdown(f'<div class="section-title">{safe(titulo)}</div>', unsafe_allow_html=True)
+        render_ai_cards(pd.DataFrame([row]), limite=1)
 
-            </div>
-        """
+    def render_busca_vazia() -> None:
+        st.warning("Não encontrei contratos relacionados a essa busca.")
+        st.info("Você pode pesquisar por fornecedor, CNPJ, valor, risco, status, origem, modelo IA ou nome do arquivo.")
 
     if pergunta:
-        pergunta_lower = pergunta.lower()
-        resposta = "Não consegui identificar a pergunta. Use uma das perguntas rápidas ou tente escrever de outra forma."
-
-        try:
-            df = contratos.copy()
-
-            df["risco_norm"] = df["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
-            df["score_num"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
-
-            df["valor_num"] = (
-                df["valor_total"]
-                .astype(str)
-                .str.replace("R$", "", regex=False)
-                .str.replace(".", "", regex=False)
-                .str.replace(",", ".", regex=False)
-            )
-            df["valor_num"] = pd.to_numeric(df["valor_num"], errors="coerce").fillna(0)
-
-            # Saudação
-            if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
-                resposta = (
-                    "Olá! Eu sou o Assistente Nexus. "
-                    "Posso consultar quantidade de contratos, riscos, scores, valores, origem, assinatura e histórico das análises."
-                )
-
-            # Quantidade total
-            elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
-                resposta = f"Existem {len(df)} contrato(s) cadastrados no histórico."
-
-            # Risco alto
-            elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
-                filtro = df[df["risco_norm"] == "ALTO"]
-
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Risco médio
-            elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
-                filtro = df[df["risco_norm"] == "MÉDIO"]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Risco baixo
-            elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
-                filtro = df[df["risco_norm"] == "BAIXO"]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Maior valor
-            elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
-                maior = df.sort_values("valor_num", ascending=False).iloc[0]
-                resposta = (
-                    f"Contrato com maior valor:\n\n"
-                    f"• Fornecedor: {maior.get('fornecedor', 'Não informado')}\n"
-                    f"• Valor: {maior.get('valor_total', 'Não informado')}\n"
-                    f"• Risco: {maior.get('risco', 'N/A')}\n"
-                    f"• Score: {maior.get('score', 'N/A')}"
-                )
-
-            # Menor score
-            elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
-                menor = df.sort_values("score_num", ascending=True).iloc[0]
-                resposta = (
-                    f"Contrato com menor score:\n\n"
-                    f"• Fornecedor: {menor.get('fornecedor', 'Não informado')}\n"
-                    f"• Score: {menor.get('score', 'N/A')}\n"
-                    f"• Risco: {menor.get('risco', 'N/A')}\n"
-                    f"• Valor: {menor.get('valor_total', 'Não informado')}"
-                )
-
-            # Maior score
-            elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
-                maior_score = df.sort_values("score_num", ascending=False).iloc[0]
-                resposta = (
-                    f"Contrato com maior score:\n\n"
-                    f"• Fornecedor: {maior_score.get('fornecedor', 'Não informado')}\n"
-                    f"• Score: {maior_score.get('score', 'N/A')}\n"
-                    f"• Risco: {maior_score.get('risco', 'N/A')}\n"
-                    f"• Valor: {maior_score.get('valor_total', 'Não informado')}"
-                )
-
-            # Score médio
-            elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
-                resposta = f"O score médio dos contratos é {round(df['score_num'].mean(), 1)}."
-
-            # Assinados
-            elif texto_tem(pergunta_lower, ["contratos assinados", "assinados", "com assinatura"]):
-                filtro = df[df["contrato_assinado"].astype(str).str.upper() == "SIM"]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Não assinados
-            elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados"]):
-                filtro = df[df["contrato_assinado"].astype(str).str.upper() != "SIM"]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Projuris
-            elif texto_tem(pergunta_lower, ["projuris"]):
-                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Ariba
-            elif texto_tem(pergunta_lower, ["ariba"]):
-                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Gemini
-            elif texto_tem(pergunta_lower, ["gemini", "ia", "inteligência artificial", "inteligencia artificial"]):
-                filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
-                
-                resposta = (
-                    resumo_executivo_busca(filtro)
-                    + listar_fornecedores(filtro)
-                    + "</div>"
-                )
-
-            # Últimos contratos
-            elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises"]):
-                ultimos = df.head(10)
-
-                resposta = (
-                    resumo_executivo_busca(ultimos)
-                    + listar_fornecedores(ultimos)
-                    + "</div>"
-                )
-
-            # Buscar fornecedor específico
-            else:
-                busca = pergunta_lower.strip()
-
-                colunas_busca = [
-                    "fornecedor",
-                    "cnpj",
-                    "valor_total",
-                    "vigencia",
-                    "status",
-                    "risco",
-                    "contrato_assinado",
-                    "modelo_ia",
-                    "tipo_origem",
-                    "arquivo",
-                ]
-
-                filtro = pd.Series(False, index=df.index)
-
-                for coluna in colunas_busca:
-                    if coluna in df.columns:
-                        filtro = filtro | df[coluna].astype(str).str.lower().str.contains(busca, na=False)
-
-                resultado_busca = df[filtro]
-
-                if not resultado_busca.empty:
-                    resposta = (
-                        resumo_executivo_busca(resultado_busca)
-                        + listar_fornecedores(resultado_busca, limite=50)
-                        + "</div>"
-                    )
-                else:
-                    resposta = (
-                        "Não encontrei contratos relacionados a essa busca.\n\n"
-                        "Você pode pesquisar por:\n"
-                        "• Fornecedor\n"
-                        "• CNPJ\n"
-                        "• Valor\n"
-                        "• Risco\n"
-                        "• Status\n"
-                        "• Origem\n"
-                        "• Modelo IA\n"
-                        "• Nome do arquivo"
-                    )
-
-        except Exception as erro:
-            resposta = f"Erro ao consultar o histórico: {erro}"
+        pergunta_lower = pergunta.lower().strip()
+        df = preparar_df_chat(contratos)
 
         st.chat_message("user").write(pergunta)
-        st.chat_message("assistant").markdown(
-            resposta,
-            unsafe_allow_html=True
-        )
+
+        with st.chat_message("assistant"):
+            try:
+                if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
+                    st.success(
+                        "Olá! Eu sou o Assistente Nexus. Posso consultar quantidade de contratos, riscos, "
+                        "scores, valores, origem, assinatura e histórico das análises."
+                    )
+
+                elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
+                    st.success(f"Existem {len(df)} contrato(s) cadastrados no histórico.")
+                    render_ai_resumo(df)
+
+                elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
+                    filtro = df[df["risco_norm"] == "ALTO"]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
+                    filtro = df[df["risco_norm"] == "MÉDIO"]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
+                    filtro = df[df["risco_norm"] == "BAIXO"]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
+                    maior = df.sort_values("valor_num", ascending=False).iloc[0]
+                    render_ai_destaque("Contrato com maior valor", maior)
+
+                elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
+                    menor = df.sort_values("score_num", ascending=True).iloc[0]
+                    render_ai_destaque("Contrato com menor score", menor)
+
+                elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
+                    maior_score = df.sort_values("score_num", ascending=False).iloc[0]
+                    render_ai_destaque("Contrato com maior score", maior_score)
+
+                elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
+                    st.success(f"O score médio dos contratos é {round(float(df['score_num'].mean()), 1)}.")
+                    render_ai_resumo(df)
+
+                elif texto_tem(pergunta_lower, ["contratos assinados", "estão assinados", "assinados", "com assinatura"]):
+                    filtro = df[df["contrato_assinado"].astype(str).str.upper() == "SIM"]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados"]):
+                    filtro = df[df["contrato_assinado"].astype(str).str.upper() != "SIM"]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["projuris"]):
+                    filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["ariba"]):
+                    filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["gemini", "ia", "inteligência artificial", "inteligencia artificial"]):
+                    filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
+                    render_ai_resumo(filtro)
+                    render_ai_cards(filtro, limite=20)
+
+                elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises"]):
+                    ultimos = df.head(10)
+                    render_ai_resumo(ultimos)
+                    render_ai_cards(ultimos, limite=10)
+
+                else:
+                    colunas_busca = [
+                        "fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco",
+                        "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
+                    ]
+                    filtro = pd.Series(False, index=df.index)
+                    for coluna in colunas_busca:
+                        if coluna in df.columns:
+                            filtro = filtro | df[coluna].astype(str).str.lower().str.contains(pergunta_lower, na=False, regex=False)
+
+                    resultado_busca = df[filtro]
+                    if resultado_busca.empty:
+                        render_busca_vazia()
+                    else:
+                        render_ai_resumo(resultado_busca)
+                        render_ai_cards(resultado_busca, limite=50)
+
+            except Exception as erro:
+                st.error(f"Erro ao consultar o histórico: {erro}")
 
     st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
