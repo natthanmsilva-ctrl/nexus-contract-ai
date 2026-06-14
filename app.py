@@ -2161,6 +2161,23 @@ if pagina == "🤖 Assistente IA":
                 c6.markdown(f"**Status**  \n{safe(r.get('status'))}", unsafe_allow_html=True)
                 c7.markdown(f"**Vigência**  \n{safe(r.get('vigencia'))}", unsafe_allow_html=True)
 
+                rodape1, rodape2 = st.columns([4, 1])
+                rodape1.caption(
+                    f"Analisado em {r.get('data_analise') or 'Não informado'} • Modelo: {r.get('modelo_ia') or 'Não informado'}"
+                )
+                try:
+                    excel_bytes = gerar_excel_card_bytes(r)
+                    rodape2.download_button(
+                        "📥 Relatório Excel",
+                        data=excel_bytes,
+                        file_name=f"analise_contrato_{r.get('id', 'assistente')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key=f"download_assistente_{r.get('id', id(r))}_{limite}",
+                    )
+                except Exception as erro_excel:
+                    rodape2.warning("Excel indisponível")
+
         if len(df_resultado) > limite:
             st.info(f"Exibindo {limite} de {len(df_resultado)} contrato(s) encontrados.")
 
