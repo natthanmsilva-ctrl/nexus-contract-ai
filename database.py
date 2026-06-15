@@ -1,5 +1,5 @@
 """
-Database - NEXUS Contract AI
+Database - Auditor de Contratos - Grupo SBF
 Histórico SQLite com compatibilidade para bancos antigos e armazenamento completo da análise.
 """
 

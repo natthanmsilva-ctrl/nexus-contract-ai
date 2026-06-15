@@ -1,10 +1,3 @@
-# =========================================================
-# NEXUS CONTRACT AI - VERSÃO REVISADA
-# Ajustes aplicados: visual profissional, carregamento seguro
-# do histórico, proteção de HTML no Assistente IA e refinamentos
-# de usabilidade sem alterar o fluxo principal.
-# =========================================================
-
 import io
 import os
 import re
@@ -40,7 +33,7 @@ if os.path.exists(TESSERACT_CMD):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 st.set_page_config(
-    page_title="Auditor DE Contratos",
+    page_title="Auditor de Contratos - Grupo SBF",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -71,7 +64,7 @@ CAMPOS_OFICIAIS = [
 CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
     "contraparte", "fornecedor",
     "contrato_assinado", "alerta_assinatura", "status", "risco", "score",
-    "resumo_executivo", "parecer", "checklist", "pendencias"
+    "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato"
 ])
 
 
@@ -483,36 +476,6 @@ section[data-testid="stSidebar"] *{
 [data-testid="stDataFrame"]{
     border-radius:16px;
     overflow:hidden;
-    border:1px solid rgba(215,191,117,.18);
-}
-
-.stTextInput input,
-.stTextArea textarea,
-.stSelectbox div[data-baseweb="select"] > div,
-.stMultiSelect div[data-baseweb="select"] > div{
-    border-radius:13px !important;
-    border:1px solid rgba(215,191,117,.24) !important;
-    background:#0b1118 !important;
-    color:#f8fafc !important;
-}
-
-.stFileUploader{
-    background:linear-gradient(145deg,rgba(16,24,34,.82),rgba(11,17,24,.82));
-    border:1px dashed rgba(215,191,117,.45);
-    border-radius:20px;
-    padding:14px;
-}
-
-button[kind="secondary"]{
-    transition:all .18s ease !important;
-}
-
-button[kind="secondary"]:hover{
-    transform:translateY(-1px);
-}
-
-[data-testid="stTabs"] button{
-    font-weight:900 !important;
 }
 
 .footer{
@@ -589,19 +552,8 @@ def as_float_score(value: Any) -> float:
 
 def carregar_contratos_chat():
     try:
-        df = listar_analises()
-        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+        return listar_analises()
     except Exception:
-        return pd.DataFrame()
-
-
-def carregar_historico_seguro() -> pd.DataFrame:
-    """Carrega o histórico sem derrubar a tela caso o banco esteja vazio ou inacessível."""
-    try:
-        df = listar_analises()
-        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-    except Exception as erro:
-        st.error(f"Não foi possível carregar o histórico. Detalhe: {erro}")
         return pd.DataFrame()
 
 
@@ -652,6 +604,113 @@ def ler_docx(file) -> str:
 
     return "\n".join(partes)
 
+
+
+# =========================================================
+# EXTRAÇÃO DE ITENS / MATERIAIS / SERVIÇOS
+# =========================================================
+def _inferir_tipo_item(descricao: Any) -> str:
+    txt = str(descricao or "").lower()
+    termos_servico = [
+        "serviço", "servico", "instalação", "instalacao", "manutenção", "manutencao",
+        "suporte", "consultoria", "licença", "licenca", "assinatura", "treinamento",
+        "implantação", "implantacao", "configuração", "configuracao", "mão de obra", "mao de obra"
+    ]
+    if any(t in txt for t in termos_servico):
+        return "Serviço"
+    return "Material"
+
+
+def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
+    """Padroniza a lista de materiais/serviços extraídos pela IA ou análise local."""
+    if not isinstance(itens, list):
+        return []
+
+    normalizados: List[Dict[str, Any]] = []
+    for idx, item in enumerate(itens, 1):
+        if isinstance(item, str):
+            item = {"descricao": item}
+        if not isinstance(item, dict):
+            continue
+
+        descricao = clean_text(
+            item.get("descricao")
+            or item.get("servico_material")
+            or item.get("serviço_material")
+            or item.get("material_servico")
+            or item.get("nome")
+            or item.get("item_descricao")
+            or "Não localizado"
+        )
+        if descricao in ("", "Não localizado", "Não localizada"):
+            continue
+
+        tipo = clean_text(item.get("tipo") or _inferir_tipo_item(descricao))
+        quantidade = clean_text(item.get("quantidade") or item.get("qtde") or item.get("qtd") or "Não localizado")
+        unidade = clean_text(item.get("unidade") or item.get("un") or item.get("uom") or "Não localizado")
+        valor_unitario = clean_text(item.get("valor_unitario") or item.get("valor_unitário") or item.get("preco_unitario") or item.get("preço_unitário") or "Não localizado")
+        valor_total = clean_text(item.get("valor_total") or item.get("total") or item.get("subtotal") or "Não localizado")
+        fonte = clean_text(item.get("fonte") or item.get("origem") or "Contrato/anexo")
+
+        normalizados.append({
+            "Item": clean_text(item.get("item") or item.get("numero") or idx),
+            "Descrição": resumir_campo(descricao, 420),
+            "Tipo": tipo if tipo not in ("", "Não localizado") else _inferir_tipo_item(descricao),
+            "Quantidade": quantidade,
+            "Unidade": unidade,
+            "Valor unitário": valor_unitario,
+            "Valor total": valor_total,
+            "Fonte": fonte,
+        })
+    return normalizados
+
+
+def extrair_itens_local(texto: str, limite: int = 80) -> List[Dict[str, Any]]:
+    """Fallback simples: procura linhas com valores em R$ e monta uma lista de itens prováveis."""
+    itens: List[Dict[str, Any]] = []
+    linhas = [re.sub(r"\s+", " ", l).strip() for l in str(texto or "").splitlines()]
+    linhas = [l for l in linhas if l]
+
+    moeda_re = re.compile(r"R\$\s?\d{1,3}(?:\.\d{3})*,\d{2}")
+    qtd_re = re.compile(r"(?:^|\s)(\d+(?:[\.,]\d+)?)\s*(UN|UND|UNID|UNIDADE|MÊS|MES|HORA|HR|DIA|DIÁRIA|DIARIA|KG|CX|PC|PÇ|SERV|SV)(?:\s|$)", re.IGNORECASE)
+    vistos = set()
+
+    for linha in linhas:
+        valores = moeda_re.findall(linha)
+        if not valores:
+            continue
+
+        descricao = moeda_re.sub(" ", linha)
+        descricao = re.sub(r"\b\d{1,4}\b", " ", descricao)
+        descricao = re.sub(r"\s+", " ", descricao).strip(" -|;:.,")
+        if len(descricao) < 5:
+            descricao = linha[:180]
+
+        chave = (descricao.lower(), tuple(valores))
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+
+        qtd = "Não localizado"
+        un = "Não localizado"
+        m_qtd = qtd_re.search(linha)
+        if m_qtd:
+            qtd = m_qtd.group(1).replace(".", ",")
+            un = m_qtd.group(2).upper()
+
+        itens.append({
+            "item": len(itens) + 1,
+            "descricao": descricao[:420],
+            "tipo": _inferir_tipo_item(descricao),
+            "quantidade": qtd,
+            "unidade": un,
+            "valor_unitario": valores[0],
+            "valor_total": valores[-1],
+            "fonte": "Extração local por linha com valor monetário",
+        })
+        if len(itens) >= limite:
+            break
+    return normalizar_itens_contrato(itens)
 
 # =========================================================
 # ANÁLISE LOCAL
@@ -850,6 +909,7 @@ def local_extract(texto: str) -> Dict[str, Any]:
         "status": status,
         "resumo_executivo": f"Análise concluída. Status: {status}. Risco: {risco}. Score: {score}. Pendências: {len(pendencias)}.",
         "parecer": "Recomenda-se revisar as pendências antes de seguir com RC/PO." if pendencias else "Contrato aparentemente possui os itens essenciais para continuidade.",
+        "itens_contrato": extrair_itens_local(texto),
         "checklist": checklist,
         "pendencias": pendencias,
     }
@@ -891,6 +951,17 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Data da Assinatura = data_assinatura
 - Valor do Contrato Original = valor_contrato_original
 
+TABELA DE ITENS OBRIGATÓRIA
+Também retorne a chave itens_contrato como lista. Cada item deve conter exatamente:
+- item
+- descricao
+- tipo
+- quantidade
+- unidade
+- valor_unitario
+- valor_total
+- fonte
+
 REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 1. Não invente dados. Se não encontrar, retorne "Não localizado".
 2. Nunca confunda CNPJ com número sem máscara. Sempre formate CNPJ como 00.000.000/0000-00 quando houver 14 dígitos.
@@ -927,6 +998,14 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 29. Forma de pagamento deve explicar o gatilho do pagamento, por exemplo: emissão/aprovação de nota fiscal, aceite, medição ou conclusão do serviço.
 30. Descrição breve do cadastro deve ser uma frase própria para cadastro de serviço/material, sem copiar histórico societário ou qualificação jurídica.
 31. valor_contrato_original deve estar formatado em reais, exemplo: "R$ 43.468,16".
+32. itens_contrato deve trazer todos os materiais e serviços unitários encontrados no contrato, anexos, propostas ou orçamentos.
+33. descricao deve ser o nome do material/serviço, sem copiar cláusulas longas.
+34. valor_unitario deve ser o preço unitário do item. Se não houver preço unitário claro, retorne "Não localizado".
+35. valor_total deve ser o total da linha/item. Se só houver valor unitário, repita o valor em valor_unitario e deixe valor_total como "Não localizado", exceto se quantidade permitir cálculo.
+36. quantidade e unidade devem ser extraídas quando existirem, exemplo: "10" e "UN".
+37. tipo deve ser "Material" ou "Serviço".
+38. fonte deve indicar de onde veio o item, exemplo: "Contrato", "Anexo", "Proposta" ou "Orçamento".
+39. Se não houver tabela de itens, retorne itens_contrato como lista vazia [].
 
 PADRÃO ESPERADO PARA ESTE TIPO DE CONTRATO
 Se o texto indicar contrato de prestação de serviços de substituição/fornecimento de baterias de nobreaks:
@@ -1059,6 +1138,7 @@ def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
     if any(t in desc_cad.lower() for t in ["transformação", "transformacao", "eireli", "societária", "societaria"]):
         base["descricao_breve_cadastro"] = resumir_campo(desc_serv, 120)
 
+    base["itens_contrato"] = normalizar_itens_contrato(base.get("itens_contrato", []))
     return base
 
 def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
@@ -1097,6 +1177,7 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         base["checklist"] = []
     if not isinstance(base.get("pendencias"), list):
         base["pendencias"] = []
+    base["itens_contrato"] = normalizar_itens_contrato(base.get("itens_contrato", []))
 
     for lista in ["checklist", "pendencias"]:
         for item in base.get(lista, []):
@@ -1305,6 +1386,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     risk_fill = excel_risk_fill(risco)
     pendencias_lista = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
     checklist_lista = resultado.get("checklist", []) if isinstance(resultado.get("checklist"), list) else []
+    itens_lista = normalizar_itens_contrato(resultado.get("itens_contrato", []))
 
     contraparte = v("contraparte", v("fornecedor"))
     cnpj_contraparte = v("cnpj_contraparte", v("cnpj"))
@@ -1323,7 +1405,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     ws.title = "Capa"
 
     # CAPA
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório Executivo de Análise Contratual", 8, 100)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório Executivo de Análise Contratual", 8, 100)
     row = _section(ws, 4, "Visão Geral da Análise")
     cards = [
         ("Status", v("status"), "A6:B8", s["green"]),
@@ -1355,7 +1437,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # DASHBOARD EXECUTIVO
     ws = wb.create_sheet("Dashboard Executivo")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Dashboard Executivo", 8, 100)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Dashboard Executivo", 8, 100)
     _section(ws, 4, "Indicadores Principais")
     for label, value, cell_range, fill in cards:
         _metric_card(ws, cell_range, label, value, fill)
@@ -1376,14 +1458,14 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # DADOS EXTRAÍDOS
     ws = wb.create_sheet("Dados Extraídos")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Dados Extraídos", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Dados Extraídos", 8, 95)
     _table_header(ws, 5, ["Campo", "Informação"], [2, 6])
     dados_rows = [(label, v(chave)) for label, chave in CAMPOS_OFICIAIS]
     _write_kv_table(ws, 6, dados_rows, row_height=42)
 
     # RESUMO EXECUTIVO
     ws = wb.create_sheet("Resumo Executivo")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Resumo Executivo", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Resumo Executivo", 8, 95)
     _table_header(ws, 5, ["Seção", "Conteúdo"], [2, 6])
     _write_kv_table(ws, 6, [
         ("Resumo Executivo", resumo),
@@ -1392,9 +1474,28 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Alerta de Assinatura", v("alerta_assinatura")),
     ], row_height=74)
 
+    # ITENS DO CONTRATO
+    ws = wb.create_sheet("Itens do Contrato")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Materiais e Serviços", 8, 95)
+    itens_df = pd.DataFrame(itens_lista)
+    if itens_df.empty:
+        itens_df = pd.DataFrame([{
+            "Item": "-",
+            "Descrição": "Nenhum material ou serviço unitário identificado no contrato/anexos.",
+            "Tipo": "N/A",
+            "Quantidade": "N/A",
+            "Unidade": "N/A",
+            "Valor unitário": "Não localizado",
+            "Valor total": "Não localizado",
+            "Fonte": "N/A",
+        }])
+    _write_dataframe_table(ws, 5, itens_df, {
+        "A": 10, "B": 52, "C": 15, "D": 14, "E": 14, "F": 18, "G": 18, "H": 22
+    }, 44)
+
     # CHECKLIST
     ws = wb.create_sheet("Checklist")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Checklist", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Checklist", 8, 95)
     checklist = pd.DataFrame(checklist_lista)
     if checklist.empty:
         checklist = pd.DataFrame([{"Validação": "Nenhum checklist retornado", "Status": "N/A", "Peso de risco": 0, "Crítico": "Não", "Evidência": "Não informado"}])
@@ -1420,7 +1521,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # PENDÊNCIAS
     ws = wb.create_sheet("Pendências")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Pendências", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Pendências", 8, 95)
     pendencias = pd.DataFrame(pendencias_lista)
     if pendencias.empty:
         pendencias = pd.DataFrame([{
@@ -1438,7 +1539,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # PARECER
     ws = wb.create_sheet("Parecer")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Parecer", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Parecer", 8, 95)
     _table_header(ws, 5, ["Item", "Descrição"], [2, 6])
     recomendacao = "Seguir com o processo caso as informações extraídas estejam de acordo com a documentação analisada." if risco == "BAIXO" else "Revisar as pendências e pontos de atenção antes de seguir com RC/PO."
     _write_kv_table(ws, 6, [
@@ -1451,7 +1552,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # AUDITORIA
     ws = wb.create_sheet("Auditoria")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Auditoria", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Auditoria", 8, 95)
     _table_header(ws, 5, ["Campo", "Valor"], [2, 6])
     _write_kv_table(ws, 6, [
         ("Data da análise", data_analise),
@@ -1467,7 +1568,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # TEXTO EXTRAÍDO
     ws = wb.create_sheet("Texto Extraído")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Texto Extraído", 8, 90)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Texto Extraído", 8, 90)
     texto_limpo = clean_text(texto or resultado.get("texto_extraido", ""))
     if texto_limpo in ("", "Não localizado"):
         texto_limpo = "Texto extraído não disponível para este registro."
@@ -1532,6 +1633,7 @@ def gerar_excel_card_bytes(row: pd.Series) -> bytes:
         "parecer": "Para gerar todas as informações detalhadas, refaça a análise do contrato nesta versão atualizada.",
         "checklist": [],
         "pendencias": [],
+        "itens_contrato": [],
     }
     return gerar_excel(resultado_fallback, "Texto extraído não disponível para este registro antigo.").getvalue()
 
@@ -1659,7 +1761,6 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     """Gera um histórico executivo com dashboard, tabela filtrável e auditoria."""
     from openpyxl import Workbook
     from openpyxl.chart import PieChart, Reference
-    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     s = _wb_styles()
     output = io.BytesIO()
@@ -1682,7 +1783,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     # =====================================================
     ws = wb.active
     ws.title = "Dashboard"
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Dashboard Executivo do Histórico", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Dashboard Executivo do Histórico", 8, 95)
     _aplicar_fundo_excel(ws, 48, 10)
     ws.freeze_panes = None
 
@@ -1738,7 +1839,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     # ABA 2 - HISTÓRICO COMPLETO
     # =====================================================
     ws = wb.create_sheet("Histórico Completo")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Histórico Completo de Análises", 13, 90)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Histórico Completo de Análises", 13, 90)
     _aplicar_fundo_excel(ws, max(40, len(df) + 12), 14)
     ws.freeze_panes = "A7"
 
@@ -1768,10 +1869,8 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
 
     if total_filtrado:
         last_row = start_row + total_filtrado
-        table = Table(displayName="TabelaHistoricoNexus", ref=f"A{start_row}:M{last_row}")
-        style = TableStyleInfo(name="TableStyleMedium4", showFirstColumn=False, showLastColumn=False, showRowStripes=False, showColumnStripes=False)
-        table.tableStyleInfo = style
-        ws.add_table(table)
+        # Mantém filtro sem criar tabela estruturada do Excel.
+        # Isso evita erro de reparo em /xl/tables/table1.xml ao abrir o arquivo.
         ws.auto_filter.ref = f"A{start_row}:M{last_row}"
 
     widths = {
@@ -1785,7 +1884,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     # ABA 3 - AUDITORIA
     # =====================================================
     ws = wb.create_sheet("Auditoria")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Auditoria do Histórico", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Auditoria do Histórico", 8, 95)
     _aplicar_fundo_excel(ws, 45, 9)
     _section(ws, 4, "Informações da Exportação", 8)
     auditoria_rows = [
@@ -1797,7 +1896,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
         ("Risco médio", qtd_medio),
         ("Risco baixo", qtd_baixo),
         ("Contratos assinados", assinados),
-        ("Observação", "Relatório gerado com base nos filtros aplicados na aba Histórico do NEXUS Contract AI."),
+        ("Observação", "Relatório gerado com base nos filtros aplicados na aba Histórico do Auditor de Contratos - Grupo SBF."),
     ]
     _table_header(ws, 6, ["Campo", "Valor"], [2, 6])
     _write_kv_table(ws, 7, auditoria_rows, row_height=32)
@@ -1850,6 +1949,26 @@ def render_filter_metric(label: str, value: Any, filtro: str, ativo: bool = Fals
 def render_info_card(label: str, value: Any) -> str:
     return f'<div class="info-card"><small>{safe(label)}</small><p>{safe(value)}</p></div>'
 
+
+
+def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e serviços identificados") -> None:
+    itens = normalizar_itens_contrato(resultado.get("itens_contrato", []))
+    st.markdown(f'<div class="section-title">{safe(titulo)}</div>', unsafe_allow_html=True)
+    if not itens:
+        st.info("Nenhum material ou serviço unitário foi identificado com valor unitário no contrato/anexos.")
+        return
+
+    df_itens = pd.DataFrame(itens)
+    st.dataframe(
+        df_itens,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Descrição": st.column_config.TextColumn("Descrição", width="large"),
+            "Valor unitário": st.column_config.TextColumn("Valor unitário"),
+            "Valor total": st.column_config.TextColumn("Valor total"),
+        },
+    )
 
 def render_contract_card(row: pd.Series) -> None:
     """Renderiza o card do Dashboard sem HTML bruto.
@@ -1916,141 +2035,11 @@ def render_contract_card(row: pd.Series) -> None:
             key=f"download_dashboard_{row.get('id', id(row))}",
         )
 
-
-
-def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], str]:
-    """Recupera do histórico o JSON completo salvo na análise.
-
-    Quando o registro é antigo e não possui resultado_json, monta um fallback com
-    os dados básicos do card para não quebrar a visualização.
-    """
-    resultado: Dict[str, Any] = {}
-    texto_extraido = ""
-
-    raw_json = row.get("resultado_json") if "resultado_json" in row.index else None
-    if raw_json not in (None, "", "Não informado"):
-        try:
-            resultado = json.loads(raw_json)
-            if not isinstance(resultado, dict):
-                resultado = {}
-        except Exception:
-            resultado = {}
-
-    if resultado:
-        texto_extraido = str(resultado.get("texto_extraido") or row.get("texto_extraido") or "")
-    else:
-        texto_extraido = str(row.get("texto_extraido") or "")
-        resultado = {
-            "data_analise": row.get("data_analise"),
-            "contraparte": row.get("fornecedor"),
-            "fornecedor": row.get("fornecedor"),
-            "cnpj_contraparte": row.get("cnpj"),
-            "cnpj": row.get("cnpj"),
-            "valor_contrato_original": row.get("valor_total"),
-            "valor_total": row.get("valor_total"),
-            "vigencia_apos_assinatura": row.get("vigencia"),
-            "vigencia": row.get("vigencia"),
-            "status": row.get("status"),
-            "risco": row.get("risco"),
-            "score": row.get("score"),
-            "contrato_assinado": row.get("contrato_assinado"),
-            "modelo_ia": row.get("modelo_ia"),
-            "tipo_origem": row.get("tipo_origem"),
-            "arquivos_analisados": row.get("arquivo"),
-            "resumo_executivo": "Registro antigo: visualização montada com os dados disponíveis no histórico.",
-            "parecer": "Para visualizar todos os campos com maior detalhe, refaça a análise do contrato nesta versão atualizada.",
-            "checklist": [],
-            "pendencias": [],
-        }
-
-    resultado.setdefault("texto_extraido", texto_extraido)
-    resultado.setdefault("arquivos_analisados", row.get("arquivo", "Não informado"))
-    resultado.setdefault("data_analise", row.get("data_analise", "Não informado"))
-    resultado.setdefault("modelo_ia", row.get("modelo_ia", "Não informado"))
-    resultado.setdefault("tipo_origem", row.get("tipo_origem", "Não informado"))
-
-    try:
-        resultado = normalizar(resultado)
-    except Exception:
-        pass
-
-    return resultado, texto_extraido
-
-
-def render_analise_completa_historico(row: pd.Series) -> None:
-    """Mostra no Histórico a mesma visão completa exibida após uma nova análise."""
-    resultado, texto_extraido = obter_resultado_completo_historico(row)
-    risco = normalize_risco(resultado.get("risco"))
-    pill = "pill-ok" if risco == "BAIXO" else "pill-warn" if risco == "MÉDIO" else "pill-danger"
-
-    st.markdown('<div class="section-title">Resumo da análise</div>', unsafe_allow_html=True)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.markdown(render_metric("Status", resultado.get("status")), unsafe_allow_html=True)
-    m2.markdown(render_metric("Risco", risco), unsafe_allow_html=True)
-    m3.markdown(render_metric("Score", resultado.get("score")), unsafe_allow_html=True)
-    m4.markdown(render_metric("Pendências", len(resultado.get("pendencias", []))), unsafe_allow_html=True)
-
-    if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
-        st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
-
-    st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
-    st.markdown(f'<span class="pill {pill}">{safe(resultado.get("resumo_executivo"))}</span>', unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
-    cards_html = "".join(
-        render_info_card(label, resultado.get(chave))
-        for label, chave in CAMPOS_OFICIAIS
-    )
-    st.markdown(f'<div class="info-grid">{cards_html}</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
-    df_checklist = pd.DataFrame(resultado.get("checklist", []))
-    if df_checklist.empty:
-        st.info("Checklist detalhado não disponível para este registro.")
-    else:
-        st.dataframe(df_checklist, use_container_width=True, hide_index=True)
-
-    st.markdown('<div class="section-title">Pendências encontradas</div>', unsafe_allow_html=True)
-    pendencias = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
-    if pendencias:
-        for i, pendencia in enumerate(pendencias, 1):
-            st.markdown(
-                f"""
-                <div class="risk-row">
-                    <b>{i}. {safe(pendencia.get('Pendência', 'Pendência'))}</b><br>
-                    Crítico: {safe(pendencia.get('Crítico', 'N/A'))} • Risco: {safe(pendencia.get('Risco', 'N/A'))}<br>
-                    <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown('<div class="ok-row">Nenhuma pendência crítica localizada.</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Parecer automático</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="executive-box"><b>Parecer:</b><br><br>{safe(resultado.get("parecer"))}</div>', unsafe_allow_html=True)
-
-    with st.expander("📄 Ver texto extraído do contrato e anexos"):
-        texto = texto_extraido or str(resultado.get("texto_extraido") or "Texto extraído não disponível para este registro.")
-        st.text_area("Texto extraído", texto[:50000], height=320, key=f"texto_historico_{row.get('id', id(row))}")
-
-    st.download_button(
-        "📥 Baixar relatório Excel completo",
-        data=gerar_excel(resultado, texto_extraido).getvalue(),
-        file_name=f"analise_completa_contrato_{row.get('id', 'historico')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=f"download_historico_completo_{row.get('id', id(row))}",
-    )
-
 # =========================================================
 # SIDEBAR
 # =========================================================
 with st.sidebar:
-    st.markdown("## ⚖️ NEXUS CONTRACT")
+    st.markdown("## ⚖️ AUDITOR DE CONTRATOS - GRUPO SBF")
     st.caption("Análise inteligente de contratos")
     st.divider()
 
@@ -2098,7 +2087,7 @@ with st.sidebar:
 if pagina == "🏠 Dashboard":
     render_hero("Dashboard", "Visão executiva das análises de contratos, riscos e pendências.")
 
-    historico = carregar_historico_seguro()
+    historico = listar_analises()
 
     col_a, col_b = st.columns([3, 1])
     with col_b:
@@ -2165,7 +2154,7 @@ if pagina == "🏠 Dashboard":
         for _, row in historico_filtrado.head(10).iterrows():
             render_contract_card(row)
 
-        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
 # =========================================================
@@ -2175,14 +2164,13 @@ if pagina == "🤖 Assistente IA":
 
     render_hero(
         "Assistente Nexus",
-        "Consulte informações dos contratos analisados no sistema de forma simples, visual e executiva."
+        "Consulte informações dos contratos analisados no sistema."
     )
 
     contratos = carregar_contratos_chat()
 
     if contratos.empty:
         st.warning("Nenhum contrato encontrado no banco.")
-        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
     st.markdown('<div class="section-title">Perguntas rápidas</div>', unsafe_allow_html=True)
@@ -2205,203 +2193,444 @@ if pagina == "🤖 Assistente IA":
 
     pergunta_exemplo = st.selectbox(
         "Escolha uma pergunta pronta",
-        [""] + exemplos,
+        [""] + exemplos
     )
 
     pergunta_digitada = st.chat_input("Ou digite sua pergunta sobre os contratos...")
+
     pergunta = pergunta_digitada or pergunta_exemplo
 
-    def texto_tem(texto: str, palavras: List[str]) -> bool:
+    def texto_tem(texto, palavras):
         texto = str(texto).lower()
         return any(p in texto for p in palavras)
 
-    def preparar_df_chat(df: pd.DataFrame) -> pd.DataFrame:
-        base = df.copy()
-        colunas_padrao = [
-            "fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco",
-            "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise"
-        ]
-        for col in colunas_padrao:
-            if col not in base.columns:
-                base[col] = "Não informado"
+    st.markdown("""
+    <style>
 
-        base["risco_norm"] = base["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
-        base["score_num"] = pd.to_numeric(base["score"], errors="coerce").fillna(0)
-        base["valor_num"] = (
-            base["valor_total"]
-            .astype(str)
-            .str.replace("R$", "", regex=False)
-            .str.replace(".", "", regex=False)
-            .str.replace(",", ".", regex=False)
-        )
-        base["valor_num"] = pd.to_numeric(base["valor_num"], errors="coerce").fillna(0)
-        return base
+    .nexus-ai-box{
+        background:linear-gradient(145deg,#101821,#0b1118);
+        border-radius:18px;
+        padding:25px;
+        margin-top:20px;
+    }
 
-    def render_ai_resumo(df_resultado: pd.DataFrame) -> None:
-        if df_resultado.empty:
-            st.info("Nenhum contrato encontrado para esta busca.")
-            return
+    .ai-summary-grid{
+        display:grid;
+        grid-template-columns:repeat(5,1fr);
+        gap:15px;
+        margin-bottom:25px;
+    }
 
-        riscos = df_resultado["risco_norm"].astype(str)
-        score_medio = round(float(df_resultado["score_num"].mean()), 1) if len(df_resultado) else 0
-        alto = int((riscos == "ALTO").sum())
-        medio = int((riscos == "MÉDIO").sum())
-        baixo = int((riscos == "BAIXO").sum())
+    .ai-summary-card{
+        background:#151d28;
+        border-radius:12px;
+        padding:18px;
+    }
 
-        st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
-        a1, a2, a3, a4, a5 = st.columns(5)
-        a1.markdown(render_metric("Contratos", len(df_resultado)), unsafe_allow_html=True)
-        a2.markdown(render_metric("Score médio", score_medio), unsafe_allow_html=True)
-        a3.markdown(render_metric("Risco alto", alto), unsafe_allow_html=True)
-        a4.markdown(render_metric("Risco médio", medio), unsafe_allow_html=True)
-        a5.markdown(render_metric("Risco baixo", baixo), unsafe_allow_html=True)
+    .ai-summary-card small{
+        color:#cbd5e1;
+    }
 
-    def render_ai_cards(df_resultado: pd.DataFrame, limite: int = 10) -> None:
-        if df_resultado.empty:
-            return
+    .ai-summary-card strong{
+        display:block;
+        color:white;
+        font-size:28px;
+        margin-top:8px;
+    }
 
-        st.markdown('<div class="section-title">Contratos encontrados</div>', unsafe_allow_html=True)
-        for _, r in df_resultado.head(limite).iterrows():
-            risco = normalize_risco(r.get("risco"))
-            cor = risco_cor(risco)
-            with st.container(border=True):
-                topo1, topo2 = st.columns([5, 1])
-                with topo1:
-                    st.markdown(f"### 📄 {safe(r.get('fornecedor', 'Não informado'))}", unsafe_allow_html=True)
-                    st.caption(str(r.get("arquivo") or "Não informado"))
-                with topo2:
-                    st.markdown(
-                        f"""
-                        <div style="text-align:center;background:{cor};color:white;
-                        padding:10px 14px;border-radius:999px;font-weight:900;font-size:12px;">
-                            {safe(risco)}
+    .ai-contract-card{
+        background:#151d28;
+        border-radius:16px;
+        padding:20px;
+        margin-bottom:15px;
+        border-left:6px solid var(--risk-color);
+    }
+
+    .ai-contract-title{
+        font-size:20px;
+        font-weight:800;
+        color:white;
+    }
+
+    .ai-risk{
+        margin-top:10px;
+        margin-bottom:15px;
+        display:inline-block;
+        padding:5px 12px;
+        border-radius:20px;
+        background:var(--risk-bg);
+        color:var(--risk-color);
+        font-size:12px;
+        font-weight:800;
+    }
+
+    .ai-contract-grid{
+        display:grid;
+        grid-template-columns:repeat(5,1fr);
+        gap:15px;
+    }
+
+    .ai-info-label{
+        color:#94a3b8;
+        font-size:11px;
+        text-transform:uppercase;
+    }
+
+    .ai-info-value{
+        color:white;
+        font-weight:700;
+        margin-top:5px;
+    }
+
+    </style>
+    """, unsafe_allow_html=True)
+
+    def listar_fornecedores(df, limite=10):
+
+        html = ""
+
+        for _, r in df.head(limite).iterrows():
+
+            risco = str(r.get("risco","")).upper()
+
+            if risco == "ALTO":
+                cor = "#ff4d4d"
+                fundo = "rgba(255,77,77,.15)"
+
+            elif risco in ["MÉDIO","MEDIO"]:
+                cor = "#f59e0b"
+                fundo = "rgba(245,158,11,.15)"
+
+            else:
+                cor = "#22c55e"
+                fundo = "rgba(34,197,94,.15)"
+
+            html += f"""
+            <div class="ai-contract-card"
+                style="--risk-color:{cor};
+                        --risk-bg:{fundo};">
+
+                <div class="ai-contract-title">
+                    {r.get("fornecedor","Não informado")}
+                </div>
+
+                <div class="ai-risk">
+                    RISCO {r.get("risco","N/A")}
+                </div>
+
+                <div class="ai-contract-grid">
+
+                    <div>
+                        <div class="ai-info-label">CNPJ</div>
+                        <div class="ai-info-value">
+                            {r.get("cnpj","")}
                         </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                    </div>
 
-                c1, c2, c3, c4, c5 = st.columns([1.2, 1.1, 1.2, .8, 1])
-                c1.markdown(f"**CNPJ**  \n{safe(r.get('cnpj'))}", unsafe_allow_html=True)
-                c2.markdown(f"**Score**  \n{safe(r.get('score'))}", unsafe_allow_html=True)
-                c3.markdown(f"**Valor**  \n{safe(r.get('valor_total'))}", unsafe_allow_html=True)
-                c4.markdown(f"**Assinado**  \n{safe(r.get('contrato_assinado'))}", unsafe_allow_html=True)
-                c5.markdown(f"**Origem**  \n{safe(r.get('tipo_origem'))}", unsafe_allow_html=True)
+                    <div>
+                        <div class="ai-info-label">Score</div>
+                        <div class="ai-info-value">
+                            {r.get("score","")}
+                        </div>
+                    </div>
 
-                c6, c7 = st.columns([1.4, 2])
-                c6.markdown(f"**Status**  \n{safe(r.get('status'))}", unsafe_allow_html=True)
-                c7.markdown(f"**Vigência**  \n{safe(r.get('vigencia'))}", unsafe_allow_html=True)
+                    <div>
+                        <div class="ai-info-label">Valor</div>
+                        <div class="ai-info-value">
+                            {r.get("valor_total","")}
+                        </div>
+                    </div>
 
-        if len(df_resultado) > limite:
-            st.info(f"Exibindo {limite} de {len(df_resultado)} contrato(s) encontrados.")
+                    <div>
+                        <div class="ai-info-label">Status</div>
+                        <div class="ai-info-value">
+                            {r.get("status","")}
+                        </div>
+                    </div>
 
-    def render_ai_destaque(titulo: str, row: pd.Series) -> None:
-        st.markdown(f'<div class="section-title">{safe(titulo)}</div>', unsafe_allow_html=True)
-        render_ai_cards(pd.DataFrame([row]), limite=1)
+                    <div>
+                        <div class="ai-info-label">Origem</div>
+                        <div class="ai-info-value">
+                            {r.get("tipo_origem","")}
+                        </div>
+                    </div>
 
-    def render_busca_vazia() -> None:
-        st.warning("Não encontrei contratos relacionados a essa busca.")
-        st.info("Você pode pesquisar por fornecedor, CNPJ, valor, risco, status, origem, modelo IA ou nome do arquivo.")
+                </div>
+            </div>
+            """
+
+        return html
+    
+    def resumo_executivo_busca(df):
+
+        if df.empty:
+            return ""
+
+        score = round(
+            pd.to_numeric(df["score"], errors="coerce")
+            .fillna(0)
+            .mean(),
+            1
+        )
+
+        riscos = (
+            df["risco"]
+            .astype(str)
+            .str.upper()
+            .replace({"MEDIO":"MÉDIO"})
+        )
+
+        alto = (riscos=="ALTO").sum()
+        medio = (riscos=="MÉDIO").sum()
+        baixo = (riscos=="BAIXO").sum()
+
+        return f"""
+        <div class="nexus-ai-box">
+
+            <h3>📊 Resumo Executivo</h3>
+
+            <div class="ai-summary-grid">
+
+                <div class="ai-summary-card">
+                    <small>Contratos</small>
+                    <strong>{len(df)}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Score Médio</small>
+                    <strong>{score}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Alto</small>
+                    <strong>{alto}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Médio</small>
+                    <strong>{medio}</strong>
+                </div>
+
+                <div class="ai-summary-card">
+                    <small>Baixo</small>
+                    <strong>{baixo}</strong>
+                </div>
+
+            </div>
+        """
 
     if pergunta:
-        pergunta_lower = pergunta.lower().strip()
-        df = preparar_df_chat(contratos)
+        pergunta_lower = pergunta.lower()
+        resposta = "Não consegui identificar a pergunta. Use uma das perguntas rápidas ou tente escrever de outra forma."
 
-        st.chat_message("user").write(pergunta)
+        try:
+            df = contratos.copy()
 
-        with st.chat_message("assistant"):
-            try:
-                if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
-                    st.success(
-                        "Olá! Eu sou o Assistente Nexus. Posso consultar quantidade de contratos, riscos, "
-                        "scores, valores, origem, assinatura e histórico das análises."
+            df["risco_norm"] = df["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+            df["score_num"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
+
+            df["valor_num"] = (
+                df["valor_total"]
+                .astype(str)
+                .str.replace("R$", "", regex=False)
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
+            )
+            df["valor_num"] = pd.to_numeric(df["valor_num"], errors="coerce").fillna(0)
+
+            # Saudação
+            if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
+                resposta = (
+                    "Olá! Eu sou o Assistente Nexus. "
+                    "Posso consultar quantidade de contratos, riscos, scores, valores, origem, assinatura e histórico das análises."
+                )
+
+            # Quantidade total
+            elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
+                resposta = f"Existem {len(df)} contrato(s) cadastrados no histórico."
+
+            # Risco alto
+            elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
+                filtro = df[df["risco_norm"] == "ALTO"]
+
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Risco médio
+            elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
+                filtro = df[df["risco_norm"] == "MÉDIO"]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Risco baixo
+            elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
+                filtro = df[df["risco_norm"] == "BAIXO"]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Maior valor
+            elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
+                maior = df.sort_values("valor_num", ascending=False).iloc[0]
+                resposta = (
+                    f"Contrato com maior valor:\n\n"
+                    f"• Fornecedor: {maior.get('fornecedor', 'Não informado')}\n"
+                    f"• Valor: {maior.get('valor_total', 'Não informado')}\n"
+                    f"• Risco: {maior.get('risco', 'N/A')}\n"
+                    f"• Score: {maior.get('score', 'N/A')}"
+                )
+
+            # Menor score
+            elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
+                menor = df.sort_values("score_num", ascending=True).iloc[0]
+                resposta = (
+                    f"Contrato com menor score:\n\n"
+                    f"• Fornecedor: {menor.get('fornecedor', 'Não informado')}\n"
+                    f"• Score: {menor.get('score', 'N/A')}\n"
+                    f"• Risco: {menor.get('risco', 'N/A')}\n"
+                    f"• Valor: {menor.get('valor_total', 'Não informado')}"
+                )
+
+            # Maior score
+            elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
+                maior_score = df.sort_values("score_num", ascending=False).iloc[0]
+                resposta = (
+                    f"Contrato com maior score:\n\n"
+                    f"• Fornecedor: {maior_score.get('fornecedor', 'Não informado')}\n"
+                    f"• Score: {maior_score.get('score', 'N/A')}\n"
+                    f"• Risco: {maior_score.get('risco', 'N/A')}\n"
+                    f"• Valor: {maior_score.get('valor_total', 'Não informado')}"
+                )
+
+            # Score médio
+            elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
+                resposta = f"O score médio dos contratos é {round(df['score_num'].mean(), 1)}."
+
+            # Assinados
+            elif texto_tem(pergunta_lower, ["contratos assinados", "assinados", "com assinatura"]):
+                filtro = df[df["contrato_assinado"].astype(str).str.upper() == "SIM"]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Não assinados
+            elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados"]):
+                filtro = df[df["contrato_assinado"].astype(str).str.upper() != "SIM"]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Projuris
+            elif texto_tem(pergunta_lower, ["projuris"]):
+                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Ariba
+            elif texto_tem(pergunta_lower, ["ariba"]):
+                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Gemini
+            elif texto_tem(pergunta_lower, ["gemini", "ia", "inteligência artificial", "inteligencia artificial"]):
+                filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
+                
+                resposta = (
+                    resumo_executivo_busca(filtro)
+                    + listar_fornecedores(filtro)
+                    + "</div>"
+                )
+
+            # Últimos contratos
+            elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises"]):
+                ultimos = df.head(10)
+
+                resposta = (
+                    resumo_executivo_busca(ultimos)
+                    + listar_fornecedores(ultimos)
+                    + "</div>"
+                )
+
+            # Buscar fornecedor específico
+            else:
+                busca = pergunta_lower.strip()
+
+                colunas_busca = [
+                    "fornecedor",
+                    "cnpj",
+                    "valor_total",
+                    "vigencia",
+                    "status",
+                    "risco",
+                    "contrato_assinado",
+                    "modelo_ia",
+                    "tipo_origem",
+                    "arquivo",
+                ]
+
+                filtro = pd.Series(False, index=df.index)
+
+                for coluna in colunas_busca:
+                    if coluna in df.columns:
+                        filtro = filtro | df[coluna].astype(str).str.lower().str.contains(busca, na=False)
+
+                resultado_busca = df[filtro]
+
+                if not resultado_busca.empty:
+                    resposta = (
+                        resumo_executivo_busca(resultado_busca)
+                        + listar_fornecedores(resultado_busca, limite=50)
+                        + "</div>"
+                    )
+                else:
+                    resposta = (
+                        "Não encontrei contratos relacionados a essa busca.\n\n"
+                        "Você pode pesquisar por:\n"
+                        "• Fornecedor\n"
+                        "• CNPJ\n"
+                        "• Valor\n"
+                        "• Risco\n"
+                        "• Status\n"
+                        "• Origem\n"
+                        "• Modelo IA\n"
+                        "• Nome do arquivo"
                     )
 
-                elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
-                    st.success(f"Existem {len(df)} contrato(s) cadastrados no histórico.")
-                    render_ai_resumo(df)
+        except Exception as erro:
+            resposta = f"Erro ao consultar o histórico: {erro}"
 
-                elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
-                    filtro = df[df["risco_norm"] == "ALTO"]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
+        st.chat_message("user").write(pergunta)
+        st.chat_message("assistant").markdown(
+            resposta,
+            unsafe_allow_html=True
+        )
 
-                elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
-                    filtro = df[df["risco_norm"] == "MÉDIO"]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
-                    filtro = df[df["risco_norm"] == "BAIXO"]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
-                    maior = df.sort_values("valor_num", ascending=False).iloc[0]
-                    render_ai_destaque("Contrato com maior valor", maior)
-
-                elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
-                    menor = df.sort_values("score_num", ascending=True).iloc[0]
-                    render_ai_destaque("Contrato com menor score", menor)
-
-                elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
-                    maior_score = df.sort_values("score_num", ascending=False).iloc[0]
-                    render_ai_destaque("Contrato com maior score", maior_score)
-
-                elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
-                    st.success(f"O score médio dos contratos é {round(float(df['score_num'].mean()), 1)}.")
-                    render_ai_resumo(df)
-
-                elif texto_tem(pergunta_lower, ["contratos assinados", "estão assinados", "assinados", "com assinatura"]):
-                    filtro = df[df["contrato_assinado"].astype(str).str.upper() == "SIM"]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados"]):
-                    filtro = df[df["contrato_assinado"].astype(str).str.upper() != "SIM"]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["projuris"]):
-                    filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["ariba"]):
-                    filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["gemini", "ia", "inteligência artificial", "inteligencia artificial"]):
-                    filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
-                    render_ai_resumo(filtro)
-                    render_ai_cards(filtro, limite=20)
-
-                elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises"]):
-                    ultimos = df.head(10)
-                    render_ai_resumo(ultimos)
-                    render_ai_cards(ultimos, limite=10)
-
-                else:
-                    colunas_busca = [
-                        "fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco",
-                        "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
-                    ]
-                    filtro = pd.Series(False, index=df.index)
-                    for coluna in colunas_busca:
-                        if coluna in df.columns:
-                            filtro = filtro | df[coluna].astype(str).str.lower().str.contains(pergunta_lower, na=False, regex=False)
-
-                    resultado_busca = df[filtro]
-                    if resultado_busca.empty:
-                        render_busca_vazia()
-                    else:
-                        render_ai_resumo(resultado_busca)
-                        render_ai_cards(resultado_busca, limite=50)
-
-            except Exception as erro:
-                st.error(f"Erro ao consultar o histórico: {erro}")
-
-    st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
 
 
@@ -2409,7 +2638,7 @@ if pagina == "🤖 Assistente IA":
 # NOVA ANÁLISE
 # =========================================================
 if pagina == "📄 Nova Análise":
-    render_hero("NEXUS Contract AI", "Análise profissional e automatizada de contratos Projuris ou Ariba em PDF e Word.")
+    render_hero("Auditor de Contratos - Grupo SBF", "Análise profissional e automatizada de contratos Projuris ou Ariba em PDF e Word.")
 
     st.markdown('<div class="section-title">Tipo de análise</div>', unsafe_allow_html=True)
     origem_contrato = st.radio("Origem do contrato", ["📘 Projuris", "🛒 Ariba"], horizontal=True, label_visibility="collapsed")
@@ -2522,6 +2751,8 @@ if pagina == "📄 Nova Análise":
             st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material"))}</div>', unsafe_allow_html=True)
 
+            render_itens_contrato(resultado)
+
             st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
             df_checklist = pd.DataFrame(resultado.get("checklist", []))
             st.dataframe(df_checklist, use_container_width=True, hide_index=True)
@@ -2564,11 +2795,11 @@ if pagina == "📄 Nova Análise":
 if pagina == "📚 Histórico":
     render_hero("Histórico", "Consulta executiva dos contratos analisados, com filtros, indicadores e relatórios.")
 
-    historico = carregar_historico_seguro()
+    historico = listar_analises()
 
     if historico.empty:
         st.info("Nenhuma análise salva ainda.")
-        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
     # -------------------------
@@ -2805,9 +3036,6 @@ if pagina == "📚 Histórico":
                         key=f"download_historico_card_{row.get('id', id(row))}",
                     )
 
-                    with st.expander("🔎 Abrir análise completa deste contrato", expanded=False):
-                        render_analise_completa_historico(row)
-
             if len(filtrado) > 25:
                 st.info("Exibindo os 25 primeiros registros filtrados. Use os filtros ou a tabela executiva para consultar os demais.")
 
@@ -2844,7 +3072,7 @@ if pagina == "📚 Histórico":
                 hide_index=True,
             )
 
-    st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
 
-st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
