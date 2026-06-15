@@ -1,5 +1,5 @@
 # =========================================================
-# NEXUS CONTRACT AI - VERSÃO REVISADA
+# Auditor de Contratos - Grupo SBF - VERSÃO REVISADA
 # Ajustes aplicados: visual profissional, carregamento seguro
 # do histórico, proteção de HTML no Assistente IA e refinamentos
 # de usabilidade sem alterar o fluxo principal.
@@ -40,7 +40,7 @@ if os.path.exists(TESSERACT_CMD):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 st.set_page_config(
-    page_title="NEXUS Contract AI",
+    page_title="Auditor de Contratos - Grupo SBF",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1584,7 +1584,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     ws.title = "Capa"
 
     # CAPA
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório Executivo de Análise Contratual", 8, 100)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório Executivo de Análise Contratual", 8, 100)
     row = _section(ws, 4, "Visão Geral da Análise")
     cards = [
         ("Status", v("status"), "A6:B8", s["green"]),
@@ -1616,7 +1616,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # DASHBOARD EXECUTIVO
     ws = wb.create_sheet("Dashboard Executivo")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Dashboard Executivo", 8, 100)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Dashboard Executivo", 8, 100)
     _section(ws, 4, "Indicadores Principais")
     for label, value, cell_range, fill in cards:
         _metric_card(ws, cell_range, label, value, fill)
@@ -1637,14 +1637,14 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # DADOS EXTRAÍDOS
     ws = wb.create_sheet("Dados Extraídos")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Dados Extraídos", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Dados Extraídos", 8, 95)
     _table_header(ws, 5, ["Campo", "Informação"], [2, 6])
     dados_rows = [(label, v(chave)) for label, chave in CAMPOS_OFICIAIS]
     _write_kv_table(ws, 6, dados_rows, row_height=42)
 
     # RESUMO EXECUTIVO
     ws = wb.create_sheet("Resumo Executivo")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Resumo Executivo", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Resumo Executivo", 8, 95)
     _table_header(ws, 5, ["Seção", "Conteúdo"], [2, 6])
     _write_kv_table(ws, 6, [
         ("Resumo Executivo", resumo),
@@ -1674,7 +1674,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # CHECKLIST
     ws = wb.create_sheet("Checklist")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Checklist", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Checklist", 8, 95)
     checklist = pd.DataFrame(checklist_lista)
     if checklist.empty:
         checklist = pd.DataFrame([{"Validação": "Nenhum checklist retornado", "Status": "N/A", "Peso de risco": 0, "Crítico": "Não", "Evidência": "Não informado"}])
@@ -1700,7 +1700,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # PENDÊNCIAS
     ws = wb.create_sheet("Pendências")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Pendências", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Pendências", 8, 95)
     pendencias = pd.DataFrame(pendencias_lista)
     if pendencias.empty:
         pendencias = pd.DataFrame([{
@@ -1718,7 +1718,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # PARECER
     ws = wb.create_sheet("Parecer")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Parecer", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Parecer", 8, 95)
     _table_header(ws, 5, ["Item", "Descrição"], [2, 6])
     recomendacao = "Seguir com o processo caso as informações extraídas estejam de acordo com a documentação analisada." if risco == "BAIXO" else "Revisar as pendências e pontos de atenção antes de seguir com RC/PO."
     _write_kv_table(ws, 6, [
@@ -1731,7 +1731,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # AUDITORIA
     ws = wb.create_sheet("Auditoria")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Auditoria", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Auditoria", 8, 95)
     _table_header(ws, 5, ["Campo", "Valor"], [2, 6])
     _write_kv_table(ws, 6, [
         ("Data da análise", data_analise),
@@ -1747,7 +1747,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     # TEXTO EXTRAÍDO
     ws = wb.create_sheet("Texto Extraído")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Relatório de Análise Contratual • Texto Extraído", 8, 90)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Texto Extraído", 8, 90)
     texto_limpo = clean_text(texto or resultado.get("texto_extraido", ""))
     if texto_limpo in ("", "Não localizado"):
         texto_limpo = "Texto extraído não disponível para este registro."
@@ -1940,7 +1940,6 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     """Gera um histórico executivo com dashboard, tabela filtrável e auditoria."""
     from openpyxl import Workbook
     from openpyxl.chart import PieChart, Reference
-    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     s = _wb_styles()
     output = io.BytesIO()
@@ -1963,7 +1962,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     # =====================================================
     ws = wb.active
     ws.title = "Dashboard"
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Dashboard Executivo do Histórico", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Dashboard Executivo do Histórico", 8, 95)
     _aplicar_fundo_excel(ws, 48, 10)
     ws.freeze_panes = None
 
@@ -2019,7 +2018,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     # ABA 2 - HISTÓRICO COMPLETO
     # =====================================================
     ws = wb.create_sheet("Histórico Completo")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Histórico Completo de Análises", 13, 90)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Histórico Completo de Análises", 13, 90)
     _aplicar_fundo_excel(ws, max(40, len(df) + 12), 14)
     ws.freeze_panes = "A7"
 
@@ -2049,10 +2048,8 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
 
     if total_filtrado:
         last_row = start_row + total_filtrado
-        table = Table(displayName="TabelaHistoricoNexus", ref=f"A{start_row}:M{last_row}")
-        style = TableStyleInfo(name="TableStyleMedium4", showFirstColumn=False, showLastColumn=False, showRowStripes=False, showColumnStripes=False)
-        table.tableStyleInfo = style
-        ws.add_table(table)
+        # Mantém filtro sem criar Tabela estruturada do Excel.
+        # Isso evita erro de reparo em /xl/tables/table1.xml ao abrir o arquivo.
         ws.auto_filter.ref = f"A{start_row}:M{last_row}"
 
     widths = {
@@ -2066,7 +2063,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
     # ABA 3 - AUDITORIA
     # =====================================================
     ws = wb.create_sheet("Auditoria")
-    _sheet_base(ws, "NEXUS CONTRACT AI", "Auditoria do Histórico", 8, 95)
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Auditoria do Histórico", 8, 95)
     _aplicar_fundo_excel(ws, 45, 9)
     _section(ws, 4, "Informações da Exportação", 8)
     auditoria_rows = [
@@ -2078,7 +2075,7 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
         ("Risco médio", qtd_medio),
         ("Risco baixo", qtd_baixo),
         ("Contratos assinados", assinados),
-        ("Observação", "Relatório gerado com base nos filtros aplicados na aba Histórico do NEXUS Contract AI."),
+        ("Observação", "Relatório gerado com base nos filtros aplicados na aba Histórico do Auditor de Contratos - Grupo SBF."),
     ]
     _table_header(ws, 6, ["Campo", "Valor"], [2, 6])
     _write_kv_table(ws, 7, auditoria_rows, row_height=32)
@@ -2217,11 +2214,140 @@ def render_contract_card(row: pd.Series) -> None:
             key=f"download_dashboard_{row.get('id', id(row))}",
         )
 
+
+
+def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], str]:
+    """Recupera do histórico o JSON completo salvo na análise."""
+    resultado: Dict[str, Any] = {}
+    texto_extraido = ""
+
+    raw_json = row.get("resultado_json") if "resultado_json" in row.index else None
+    if raw_json not in (None, "", "Não informado"):
+        try:
+            resultado = json.loads(raw_json)
+            if not isinstance(resultado, dict):
+                resultado = {}
+        except Exception:
+            resultado = {}
+
+    if resultado:
+        texto_extraido = str(resultado.get("texto_extraido") or row.get("texto_extraido") or "")
+    else:
+        texto_extraido = str(row.get("texto_extraido") or "")
+        resultado = {
+            "data_analise": row.get("data_analise"),
+            "contraparte": row.get("fornecedor"),
+            "fornecedor": row.get("fornecedor"),
+            "cnpj_contraparte": row.get("cnpj"),
+            "cnpj": row.get("cnpj"),
+            "valor_contrato_original": row.get("valor_total"),
+            "valor_total": row.get("valor_total"),
+            "vigencia_apos_assinatura": row.get("vigencia"),
+            "vigencia": row.get("vigencia"),
+            "status": row.get("status"),
+            "risco": row.get("risco"),
+            "score": row.get("score"),
+            "contrato_assinado": row.get("contrato_assinado"),
+            "modelo_ia": row.get("modelo_ia"),
+            "tipo_origem": row.get("tipo_origem"),
+            "arquivos_analisados": row.get("arquivo"),
+            "resumo_executivo": "Registro antigo: visualização montada com os dados disponíveis no histórico.",
+            "parecer": "Para visualizar todos os campos com maior detalhe, refaça a análise do contrato nesta versão atualizada.",
+            "checklist": [],
+            "pendencias": [],
+            "itens_contrato": [],
+        }
+
+    resultado.setdefault("texto_extraido", texto_extraido)
+    resultado.setdefault("arquivos_analisados", row.get("arquivo", "Não informado"))
+    resultado.setdefault("data_analise", row.get("data_analise", "Não informado"))
+    resultado.setdefault("modelo_ia", row.get("modelo_ia", "Não informado"))
+    resultado.setdefault("tipo_origem", row.get("tipo_origem", "Não informado"))
+
+    try:
+        resultado = normalizar(resultado)
+    except Exception:
+        pass
+
+    return resultado, texto_extraido
+
+
+def render_analise_completa_historico(row: pd.Series) -> None:
+    """Mostra no Histórico a mesma visão completa exibida após uma nova análise."""
+    resultado, texto_extraido = obter_resultado_completo_historico(row)
+    risco = normalize_risco(resultado.get("risco"))
+    pill = "pill-ok" if risco == "BAIXO" else "pill-warn" if risco == "MÉDIO" else "pill-danger"
+
+    st.markdown('<div class="section-title">Resumo da análise</div>', unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.markdown(render_metric("Status", resultado.get("status")), unsafe_allow_html=True)
+    m2.markdown(render_metric("Risco", risco), unsafe_allow_html=True)
+    m3.markdown(render_metric("Score", resultado.get("score")), unsafe_allow_html=True)
+    m4.markdown(render_metric("Pendências", len(resultado.get("pendencias", []))), unsafe_allow_html=True)
+
+    if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
+        st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
+
+    st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
+    st.markdown(f'<span class="pill {pill}">{safe(resultado.get("resumo_executivo"))}</span>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
+    cards_html = "".join(
+        render_info_card(label, resultado.get(chave))
+        for label, chave in CAMPOS_OFICIAIS
+    )
+    st.markdown(f'<div class="info-grid">{cards_html}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>', unsafe_allow_html=True)
+
+    render_itens_contrato(resultado)
+
+    st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
+    df_checklist = pd.DataFrame(resultado.get("checklist", []))
+    if df_checklist.empty:
+        st.info("Checklist detalhado não disponível para este registro.")
+    else:
+        st.dataframe(df_checklist, use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="section-title">Pendências encontradas</div>', unsafe_allow_html=True)
+    pendencias = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
+    if pendencias:
+        for i, pendencia in enumerate(pendencias, 1):
+            st.markdown(
+                f"""
+                <div class="risk-row">
+                    <b>{i}. {safe(pendencia.get('Pendência', 'Pendência'))}</b><br>
+                    Crítico: {safe(pendencia.get('Crítico', 'N/A'))} • Risco: {safe(pendencia.get('Risco', 'N/A'))}<br>
+                    <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown('<div class="ok-row">Nenhuma pendência crítica localizada.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">Parecer automático</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="executive-box"><b>Parecer:</b><br><br>{safe(resultado.get("parecer"))}</div>', unsafe_allow_html=True)
+
+    with st.expander("📄 Ver texto extraído do contrato e anexos"):
+        texto = texto_extraido or str(resultado.get("texto_extraido") or "Texto extraído não disponível para este registro.")
+        st.text_area("Texto extraído", texto[:50000], height=320, key=f"texto_historico_{row.get('id', id(row))}")
+
+    st.download_button(
+        "📥 Baixar relatório Excel completo",
+        data=gerar_excel(resultado, texto_extraido).getvalue(),
+        file_name=f"analise_completa_contrato_{row.get('id', 'historico')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key=f"download_historico_completo_{row.get('id', id(row))}",
+    )
+
 # =========================================================
 # SIDEBAR
 # =========================================================
 with st.sidebar:
-    st.markdown("## ⚖️ NEXUS CONTRACT")
+    st.markdown("## ⚖️ AUDITOR DE CONTRATOS")
     st.caption("Análise inteligente de contratos")
     st.divider()
 
@@ -2325,7 +2451,7 @@ if pagina == "🏠 Dashboard":
         for _, row in historico_filtrado.head(10).iterrows():
             render_contract_card(row)
 
-        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
 # =========================================================
@@ -2334,7 +2460,7 @@ if pagina == "🏠 Dashboard":
 if pagina == "🤖 Assistente IA":
 
     render_hero(
-        "Assistente Nexus",
+        "Assistente Auditor",
         "Consulte informações dos contratos analisados no sistema."
     )
 
@@ -2616,7 +2742,7 @@ if pagina == "🤖 Assistente IA":
             # Saudação
             if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
                 resposta = (
-                    "Olá! Eu sou o Assistente Nexus. "
+                    "Olá! Eu sou o Assistente Auditor. "
                     "Posso consultar quantidade de contratos, riscos, scores, valores, origem, assinatura e histórico das análises."
                 )
 
@@ -2805,7 +2931,7 @@ if pagina == "🤖 Assistente IA":
             unsafe_allow_html=True
         )
 
-    st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
 
 
@@ -2813,7 +2939,7 @@ if pagina == "🤖 Assistente IA":
 # NOVA ANÁLISE
 # =========================================================
 if pagina == "📄 Nova Análise":
-    render_hero("NEXUS Contract AI", "Análise profissional e automatizada de contratos Projuris ou Ariba em PDF e Word.")
+    render_hero("Auditor de Contratos - Grupo SBF", "Análise profissional e automatizada de contratos Projuris ou Ariba em PDF e Word.")
 
     st.markdown('<div class="section-title">Tipo de análise</div>', unsafe_allow_html=True)
     origem_contrato = st.radio("Origem do contrato", ["📘 Projuris", "🛒 Ariba"], horizontal=True, label_visibility="collapsed")
@@ -2980,7 +3106,7 @@ if pagina == "📚 Histórico":
 
     if historico.empty:
         st.info("Nenhuma análise salva ainda.")
-        st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
     # -------------------------
@@ -3217,6 +3343,9 @@ if pagina == "📚 Histórico":
                         key=f"download_historico_card_{row.get('id', id(row))}",
                     )
 
+                    with st.expander("🔎 Abrir análise completa deste contrato", expanded=False):
+                        render_analise_completa_historico(row)
+
             if len(filtrado) > 25:
                 st.info("Exibindo os 25 primeiros registros filtrados. Use os filtros ou a tabela executiva para consultar os demais.")
 
@@ -3253,7 +3382,7 @@ if pagina == "📚 Histórico":
                 hide_index=True,
             )
 
-    st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
 
-st.markdown('<div class="footer">NEXUS CONTRACT AI • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
