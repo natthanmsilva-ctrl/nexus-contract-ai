@@ -3182,10 +3182,23 @@ if pagina == "📄 Nova Análise":
     origem_contrato = st.radio("Origem do contrato", ["📘 Projuris", "🛒 Ariba"], horizontal=True, label_visibility="collapsed")
 
     st.markdown('<div class="section-title">Upload do contrato</div>', unsafe_allow_html=True)
+
+    # Controle para limpar todos os anexos de uma vez.
+    # No Streamlit, o file_uploader só é realmente limpo quando a key muda.
+    if "upload_contrato_key" not in st.session_state:
+        st.session_state["upload_contrato_key"] = 0
+
+    up_col1, up_col2 = st.columns([4, 1])
+    with up_col2:
+        if st.button("🧹 Limpar anexos", use_container_width=True):
+            st.session_state["upload_contrato_key"] += 1
+            st.rerun()
+
     arquivos = st.file_uploader(
         "Envie o contrato principal e anexos",
         type=["pdf", "docx"],
         accept_multiple_files=True,
+        key=f"upload_contrato_{st.session_state['upload_contrato_key']}",
     )
 
     if not arquivos:
