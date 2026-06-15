@@ -40,7 +40,7 @@ if os.path.exists(TESSERACT_CMD):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 st.set_page_config(
-    page_title="NEXUS Contract AI",
+    page_title="Auditor DE Contratos",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded",
