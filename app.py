@@ -68,7 +68,12 @@ CAMPOS_OFICIAIS = [
     ("Anticorrupção", "anticorrupcao"),
     ("Proteção de Dados LGPD", "protecao_dados_lgpd"),
     ("Data da Assinatura", "data_assinatura"),
+    ("Data do Contrato", "data_contrato"),
+    ("Data Conclusão DocuSign", "data_conclusao_docusign"),
     ("Valor do Contrato Original", "valor_contrato_original"),
+    ("Valor Mensal Estimado", "valor_mensal_estimado"),
+    ("Valor Total Estimado da Vigência", "valor_total_estimado_vigencia"),
+    ("Pessoas que assinaram", "pessoas_que_assinaram"),
 ]
 
 CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
@@ -1302,6 +1307,16 @@ Retorne APENAS JSON válido, sem markdown, sem comentários e sem texto fora do 
 OBJETIVO PRINCIPAL
 Extrair os dados comerciais e jurídicos reais do contrato, priorizando o documento principal e usando anexos/orçamentos apenas quando o contrato fizer referência a eles.
 
+ORDEM DE PRIORIDADE DOS DOCUMENTOS
+Quando os arquivos enviados tiverem minutas, versões antigas e versão assinada, siga esta ordem:
+1. PDF assinado com DocuSign / Certificate of Completion com Status Completed.
+2. Contrato final em PDF.
+3. Proposta comercial.
+4. Proposta técnica.
+5. E-mails de negociação apenas como contexto comercial.
+6. Minutas DOCX antigas somente quando não houver contrato final assinado.
+Se houver conflito entre minuta antiga e PDF assinado, prevalece o PDF assinado.
+
 CAMPOS OBRIGATÓRIOS
 Retorne exatamente estas chaves principais e internas:
 {CAMPOS_JSON_OBRIGATORIOS}
@@ -1324,7 +1339,12 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Anticorrupção = anticorrupcao
 - Proteção de Dados LGPD = protecao_dados_lgpd
 - Data da Assinatura = data_assinatura
+- Data do Contrato = data_contrato
+- Data Conclusão DocuSign = data_conclusao_docusign
 - Valor do Contrato Original = valor_contrato_original
+- Valor Mensal Estimado = valor_mensal_estimado
+- Valor Total Estimado da Vigência = valor_total_estimado_vigencia
+- Pessoas que assinaram = pessoas_que_assinaram
 
 TABELA DE ITENS OBRIGATÓRIA
 Também retorne a chave itens_contrato como lista. Cada item deve conter, quando aplicável:
@@ -1358,16 +1378,22 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 7. descricao_breve_cadastro deve ser curta e própria para cadastro de material/serviço. Exemplo: "Fornecimento e instalação de baterias para nobreaks".
 8. condicao_pagamento_dias deve retornar em formato claro, exemplo: "90 dias". Não retorne apenas número solto.
 9. forma_pagamento deve informar a forma descrita no contrato, exemplo: "Mediante emissão de nota fiscal".
-10. valor_contrato_original deve ser o VALOR TOTAL DO CONTRATO/ORÇAMENTO REFERENCIADO, não valor unitário, não parcela e não subtotal parcial. Se houver quantitativo x valor unitário, calcule o total. Se existir orçamento anexo prevalecente citado pelo contrato, use o total do orçamento.
-11. Se houver mais de um valor monetário, priorize nesta ordem:
-    a) valor total do contrato;
-    b) valor total do orçamento/proposta anexa citada no contrato;
-    c) soma/calculo por quantidade x valor unitário;
-    d) maior valor total claramente vinculado ao objeto.
-12. vigencia_apos_assinatura deve manter a redação objetiva do contrato, exemplo: "Prazo indeterminado".
-13. data_assinatura deve ser a data da assinatura do contrato, não data de orçamento, não data de proposta, não data de alteração cadastral.
-14. contrato_assinado deve retornar "Sim" ou "Não".
-15. Se não encontrar assinatura, alerta_assinatura deve retornar "Contrato sem evidência de assinatura localizada".
+10. valor_contrato_original deve ser o valor comercial base do contrato/proposta. Em contratos recorrentes, mensais ou por consumo estimado, NÃO multiplique pela vigência; use o valor mensal/recorrente como valor_contrato_original.
+11. valor_mensal_estimado deve ser preenchido quando houver tabela mensal, consumo mensal, quantidade mensal ou "valor mensal estimado". Exemplo: R$ 39.200,00 mensais estimados.
+12. valor_total_estimado_vigencia deve ser preenchido somente quando houver cálculo de valor mensal x prazo. Se for cálculo seu, escreva como estimado, exemplo: R$ 1.411.200,00 (estimado para 36 meses).
+13. Se houver mais de um valor monetário, priorize nesta ordem:
+    a) valor mensal/recorrente ou comercial base apresentado na proposta;
+    b) valor total explícito do contrato, se o contrato realmente trouxer total fechado;
+    c) soma dos itens da proposta mensal;
+    d) cálculo estimado da vigência apenas no campo valor_total_estimado_vigencia.
+14. vigencia_apos_assinatura deve manter a redação objetiva do contrato, exemplo: "36 meses a partir da assinatura" ou "Prazo indeterminado".
+15. data_contrato deve ser a data textual do instrumento, exemplo "São Paulo, 21 de maio de 2026".
+16. data_conclusao_docusign deve ser a data do Certificate of Completion / Completed do DocuSign.
+17. data_assinatura deve ser a data final efetiva da assinatura quando houver DocuSign Completed; se não houver certificado, use a data textual do contrato.
+18. contrato_assinado deve retornar "Sim" se houver DocuSign Certificate of Completion com Status Completed, assinaturas eletrônicas concluídas, ou evidência de assinatura das partes/testemunhas.
+19. pessoas_que_assinaram deve listar os nomes encontrados no certificado DocuSign ou nas assinaturas do contrato. Retorne nomes separados por ponto e vírgula.
+20. Se houver PDF assinado/DocuSign Completed, ignore pendências de assinatura existentes em minutas DOCX antigas.
+21. Se não encontrar assinatura, alerta_assinatura deve retornar "Contrato sem evidência de assinatura localizada".
 16. anticorrupcao e protecao_dados_lgpd devem resumir a cláusula específica quando houver, explicando a obrigação principal.
 17. risco deve ser BAIXO, MÉDIO ou ALTO.
 18. score deve ser número inteiro de 0 a 100, onde maior é melhor.
@@ -1410,6 +1436,12 @@ EXEMPLOS DE NÍVEL DE DETALHE ESPERADO
 - rescisao_indenizacao: "Rescisão mediante aviso prévio de 30 dias, sem ônus ou multa, conforme previsto no contrato."
 - anticorrupcao: "Há cláusula de anticorrupção exigindo conduta ética e conformidade com a Lei 12.846/13."
 - protecao_dados_lgpd: "Há cláusula de proteção de dados pessoais, com obrigações de segurança, confidencialidade e conformidade com a LGPD."
+
+VALIDAÇÃO FINAL OBRIGATÓRIA ANTES DE RESPONDER
+- Se identificar tabela de valores mensal e vigência em meses, separe valor mensal de valor total estimado da vigência.
+- Se identificar Certificate of Completion / Status Completed do DocuSign, contrato_assinado = "Sim", status não deve ser "Pendente de assinatura" e pessoas_que_assinaram deve listar os signatários.
+- Se identificar PDF assinado e minutas DOCX sem assinatura, prevalece o PDF assinado.
+- Para contratos de alimentação/refeição, itens como Desjejum, Almoço e Café da Tarde devem aparecer em itens_contrato com quantidade, unidade, valor unitário e valor total.
 
 CONTRATO E ANEXOS EXTRAÍDOS:
 {texto[:120000]}
@@ -1741,6 +1773,256 @@ def resumir_campo(valor: Any, limite: int = 220) -> str:
     return corte + "..."
 
 
+# =========================================================
+# PÓS-VALIDAÇÃO DOCUMENTAL: VALORES, DATAS E ASSINANTES
+# =========================================================
+_MESES_PT = {
+    "janeiro": "01", "fevereiro": "02", "março": "03", "marco": "03",
+    "abril": "04", "maio": "05", "junho": "06", "julho": "07",
+    "agosto": "08", "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12",
+}
+
+
+def _data_textual_para_br(valor: Any) -> str:
+    txt = clean_text(valor)
+    m = re.search(r"(\d{1,2})\s+de\s+([A-Za-zçÇãáéíóúâêôõ]+)\s+de\s+(\d{4})", txt, flags=re.IGNORECASE)
+    if not m:
+        return txt if _valor_informado(txt) else "Não localizado"
+    dia = int(m.group(1))
+    mes = _MESES_PT.get(m.group(2).lower(), "")
+    ano = m.group(3)
+    if not mes:
+        return txt
+    return f"{dia:02d}/{mes}/{ano}"
+
+
+def _formatar_data_slash(valor: Any) -> str:
+    txt = clean_text(valor)
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", txt)
+    if not m:
+        return txt if _valor_informado(txt) else "Não localizado"
+    a, b, ano = int(m.group(1)), int(m.group(2)), m.group(3)
+    # DocuSign costuma trazer M/D/YYYY. Se o segundo número > 12, converte para DD/MM/YYYY.
+    if b > 12 and a <= 12:
+        return f"{b:02d}/{a:02d}/{ano}"
+    return f"{a:02d}/{b:02d}/{ano}"
+
+
+def _extrair_data_contrato(texto: str) -> str:
+    txt = str(texto or "")
+    padroes = [
+        r"São Paulo,\s*(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõ]+\s+de\s+\d{4})",
+        r"Sao Paulo,\s*(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõ]+\s+de\s+\d{4})",
+        r"(?:Data do Contrato|Data do contrato)[:\s-]+(\d{1,2}/\d{1,2}/\d{4})",
+    ]
+    for p in padroes:
+        m = re.search(p, txt, flags=re.IGNORECASE)
+        if m:
+            val = m.group(1)
+            return _data_textual_para_br(val) if " de " in val.lower() else _formatar_data_slash(val)
+    return "Não localizado"
+
+
+def _extrair_data_conclusao_docusign(texto: str) -> str:
+    txt = str(texto or "")
+    padroes = [
+        r"Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4})",
+        r"Envelope\s+Summary\s+Events[\s\S]{0,700}?Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4})",
+        r"Status:\s*Completed[\s\S]{0,2000}?Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4})",
+    ]
+    for p in padroes:
+        m = re.search(p, txt, flags=re.IGNORECASE)
+        if m:
+            return _formatar_data_slash(m.group(1))
+    # fallback: última assinatura individual do certificado
+    assinaturas = re.findall(r"Signed:\s*(\d{1,2}/\d{1,2}/\d{4})", txt, flags=re.IGNORECASE)
+    if assinaturas:
+        return _formatar_data_slash(assinaturas[-1])
+    return "Não localizado"
+
+
+def _extrair_assinantes_docusign(texto: str) -> list[str]:
+    txt = str(texto or "")
+    low = txt.lower()
+    if "docusign" not in low and "signer events" not in low and "certificate of completion" not in low:
+        return []
+
+    start = low.find("signer events")
+    if start < 0:
+        start = low.find("certificate of completion")
+    seg = txt[start:] if start >= 0 else txt
+    finais = [
+        "in person signer events", "editor delivery events", "agent delivery events",
+        "intermediary delivery events", "certified delivery events", "carbon copy events",
+        "witness events", "notary events", "envelope summary events", "payment events",
+    ]
+    seg_low = seg.lower()
+    cortes = [seg_low.find(f) for f in finais if seg_low.find(f) > 0]
+    if cortes:
+        seg = seg[:min(cortes)]
+
+    linhas = [clean_text(l) for l in seg.splitlines() if clean_text(l) not in ("", "Não localizado")]
+    nomes: list[str] = []
+    for i, linha in enumerate(linhas[:-1]):
+        prox = linhas[i + 1]
+        if "@" not in prox:
+            continue
+
+        # Em alguns PDFs o nome vem na mesma linha do timestamp, ex.:
+        # "Camila Araujo da Costa Sent: 5/21/2026 7:35:42 PM".
+        linha_nome = re.sub(r"\s+(Sent|Viewed|Signed):.*$", "", linha, flags=re.IGNORECASE).strip()
+
+        if "@" in linha_nome or re.search(r"\d", linha_nome):
+            continue
+        low_l = linha_nome.lower()
+        bloqueios = [
+            "signer events", "signature timestamp", "security level", "electronic record",
+            "using ip", "docusign", "not offered", "accepted", "signature adoption",
+            "grupo sbf", "max fast", "none", "sent", "viewed", "signed",
+        ]
+        if any(b in low_l for b in bloqueios):
+            continue
+        # Evita cargos/áreas. Nome real costuma ter 2+ palavras.
+        palavras = re.findall(r"[A-Za-zÀ-ÿ]+", linha_nome)
+        if len(palavras) < 2:
+            continue
+        nome = re.sub(r"\s+", " ", linha_nome).strip(" -:;,.|")
+        if nome and nome not in nomes:
+            nomes.append(nome)
+    return nomes
+
+
+def _parse_moeda_brasil(valor: Any) -> float | None:
+    txt = clean_text(valor)
+    if not _valor_informado(txt):
+        return None
+    m = re.search(r"(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|[0-9]+(?:,[0-9]{2})?)", txt)
+    if not m:
+        return None
+    num = m.group(1).replace(".", "").replace(",", ".")
+    try:
+        return float(num)
+    except Exception:
+        return None
+
+
+def _formatar_moeda_brasil(valor: float, sufixo: str = "") -> str:
+    s = f"R$ {valor:,.2f}"
+    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+    return (s + (f" {sufixo}" if sufixo else "")).strip()
+
+
+def _extrair_meses_vigencia(texto: str, base: Dict[str, Any] | None = None) -> int | None:
+    candidatos = [str(texto or "")]
+    if base:
+        candidatos.extend([str(base.get("vigencia_apos_assinatura") or ""), str(base.get("vigencia") or "")])
+    plano = " ".join(candidatos)
+    m = re.search(r"(\d{1,3})\s*(?:\([^)]*\)\s*)?mes(?:es)?", plano, flags=re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def _somar_valores_itens(itens: Any) -> float | None:
+    itens_norm = normalizar_itens_contrato(itens)
+    total = 0.0
+    encontrou = False
+    for item in itens_norm:
+        v = _parse_moeda_brasil(item.get("Valor total"))
+        if v is not None:
+            total += v
+            encontrou = True
+    return total if encontrou and total > 0 else None
+
+
+def _extrair_total_mensal_texto(texto: str) -> float | None:
+    txt = str(texto or "")
+    # Busca totais próximos de tabelas de proposta/cenário final.
+    padroes = [
+        r"TOTAL\s+(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|[0-9]+,[0-9]{2})",
+        r"CDB\s+Final[^R$]{0,80}R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})",
+        r"valor\s+mensal\s+estimado[^R$]{0,80}R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})",
+    ]
+    valores = []
+    for p in padroes:
+        for m in re.finditer(p, txt, flags=re.IGNORECASE):
+            v = _parse_moeda_brasil(m.group(1))
+            if v is not None:
+                valores.append(v)
+    if valores:
+        # Em propostas de alimentação o menor total relevante costuma ser mensal; evita totais de vigência calculados.
+        return min(valores)
+    return None
+
+
+def aplicar_regras_finais_contrato(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
+    """Blindagem final contra confusão de minuta, valor mensal x vigência e assinatura DocuSign."""
+    texto = str(texto or "")
+    low = texto.lower()
+
+    data_contrato = _extrair_data_contrato(texto)
+    data_docusign = _extrair_data_conclusao_docusign(texto)
+    assinantes = _extrair_assinantes_docusign(texto)
+
+    if _valor_informado(data_contrato):
+        base["data_contrato"] = data_contrato
+    if _valor_informado(data_docusign):
+        base["data_conclusao_docusign"] = data_docusign
+        base["data_assinatura"] = data_docusign
+
+    if assinantes:
+        base["assinantes"] = assinantes
+        base["pessoas_que_assinaram"] = "; ".join(assinantes)
+
+    docusign_completed = bool(re.search(r"Certificate Of Completion|Certificate of Completion|Status:\s*Completed|Completed\s+Security\s+Checked", texto, flags=re.IGNORECASE))
+    if docusign_completed:
+        base["contrato_assinado"] = "Sim"
+        base["alerta_assinatura"] = "Contrato assinado eletronicamente via DocuSign / Certificate of Completion."
+        if str(base.get("status", "")).strip().lower() in ("", "não localizado", "pendente de assinatura", "em negociação / pendente de assinatura"):
+            base["status"] = "Ativo"
+        # Remove pendências de assinatura herdadas de minutas antigas.
+        pend_filtradas = []
+        for p in base.get("pendencias", []) if isinstance(base.get("pendencias"), list) else []:
+            txtp = json.dumps(p, ensure_ascii=False).lower() if isinstance(p, dict) else str(p).lower()
+            if "assinatura" in txtp or "assinar" in txtp or "docusign" in txtp:
+                continue
+            pend_filtradas.append(p)
+        base["pendencias"] = pend_filtradas
+
+        checklist = []
+        for item in base.get("checklist", []) if isinstance(base.get("checklist"), list) else []:
+            if isinstance(item, dict):
+                val = str(item.get("Validação") or item.get("validacao") or item.get("validação") or "").lower()
+                if "assinatura" in val or "assinado" in val:
+                    item["Status"] = "Aprovado"
+                    item["Evidência"] = base.get("alerta_assinatura")
+            checklist.append(item)
+        base["checklist"] = checklist
+
+    itens = normalizar_itens_contrato(base.get("itens_contrato", []))
+    mensal = _somar_valores_itens(itens) or _extrair_total_mensal_texto(texto)
+    meses = _extrair_meses_vigencia(texto, base)
+    atual = _parse_moeda_brasil(base.get("valor_contrato_original") or base.get("valor_total"))
+
+    if mensal:
+        base["valor_mensal_estimado"] = _formatar_moeda_brasil(mensal, "mensais estimados")
+        # Se o valor original estiver igual ao valor da vigência, volta o valor original para o mensal.
+        if meses and atual and abs(atual - (mensal * meses)) <= max(10.0, mensal * 0.01):
+            base["valor_total_estimado_vigencia"] = _formatar_moeda_brasil(atual, f"(estimado para {meses} meses)")
+            base["valor_contrato_original"] = _formatar_moeda_brasil(mensal, "mensais estimados")
+            base["valor_total"] = base["valor_contrato_original"]
+        elif meses:
+            base.setdefault("valor_total_estimado_vigencia", _formatar_moeda_brasil(mensal * meses, f"(estimado para {meses} meses)"))
+            if not atual or (atual and atual > mensal * 3):
+                base["valor_contrato_original"] = _formatar_moeda_brasil(mensal, "mensais estimados")
+                base["valor_total"] = base["valor_contrato_original"]
+
+    return base
+
+
 def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
     """Ajustes finais para evitar cards quebrados e dados mal formatados."""
     base["cnpj_empresa_grupo"] = formatar_cnpj(base.get("cnpj_empresa_grupo"))
@@ -1797,6 +2079,16 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         "descricao_servico_material": "descricao_servico_material",
         "vigencia_apos_a_data_de_assinatura": "vigencia_apos_assinatura",
         "valor_do_contrato_original": "valor_contrato_original",
+        "valor_mensal": "valor_mensal_estimado",
+        "valor_mensal_estimado": "valor_mensal_estimado",
+        "valor_total_da_vigencia": "valor_total_estimado_vigencia",
+        "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
+        "data_do_contrato": "data_contrato",
+        "data_conclusao_docusign": "data_conclusao_docusign",
+        "data_de_conclusao_docusign": "data_conclusao_docusign",
+        "assinantes": "pessoas_que_assinaram",
+        "pessoas_que_assinaram": "pessoas_que_assinaram",
+        "pessoas_que_assinaram_o_contrato": "pessoas_que_assinaram",
     }
     def _vazio(valor: Any) -> bool:
         txt = clean_text(valor)
@@ -1827,6 +2119,8 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         base["itens_contrato"] = itens_ia
     else:
         base["itens_contrato"] = extrair_itens_local(str(texto_fallback or ""))
+
+    base = aplicar_regras_finais_contrato(base, str(texto_fallback or ""))
 
     for lista in ["checklist", "pendencias"]:
         for item in base.get(lista, []):
@@ -2073,9 +2367,14 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Contraparte", contraparte),
         ("CNPJ Contraparte", cnpj_contraparte),
         ("Valor do Contrato", valor_contrato),
+        ("Valor Mensal Estimado", v("valor_mensal_estimado")),
+        ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Vigência", vigencia),
         ("Pagamento", pagamento),
         ("Data da Assinatura", data_assinatura),
+        ("Data do Contrato", v("data_contrato")),
+        ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
+        ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
         ("Modelo IA", modelo_ia),
     ], row_height=30)
@@ -2730,6 +3029,8 @@ def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], 
             "cnpj_contraparte": row.get("cnpj"),
             "cnpj": row.get("cnpj"),
             "valor_contrato_original": row.get("valor_total"),
+            "valor_mensal_estimado": row.get("valor_mensal_estimado") if "valor_mensal_estimado" in row.index else "Não localizado",
+            "valor_total_estimado_vigencia": row.get("valor_total_estimado_vigencia") if "valor_total_estimado_vigencia" in row.index else "Não localizado",
             "valor_total": row.get("valor_total"),
             "vigencia_apos_assinatura": row.get("vigencia"),
             "vigencia": row.get("vigencia"),
@@ -2737,6 +3038,9 @@ def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], 
             "risco": row.get("risco"),
             "score": row.get("score"),
             "contrato_assinado": row.get("contrato_assinado"),
+            "data_contrato": row.get("data_contrato") if "data_contrato" in row.index else "Não localizado",
+            "data_conclusao_docusign": row.get("data_conclusao_docusign") if "data_conclusao_docusign" in row.index else "Não localizado",
+            "pessoas_que_assinaram": row.get("pessoas_que_assinaram") if "pessoas_que_assinaram" in row.index else "Não localizado",
             "modelo_ia": row.get("modelo_ia"),
             "tipo_origem": row.get("tipo_origem"),
             "arquivos_analisados": row.get("arquivo"),
@@ -3523,6 +3827,7 @@ if pagina == "📄 Nova Análise":
                 elif not resultado.get("itens_contrato"):
                     resultado["itens_contrato"] = extrair_itens_local(texto)
 
+                resultado = aplicar_regras_finais_contrato(resultado, texto)
                 resultado["data_analise"] = datetime.now().strftime("%d/%m/%Y %H:%M")
                 resultado["origem_contrato"] = origem_contrato
 
