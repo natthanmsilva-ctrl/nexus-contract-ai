@@ -1447,6 +1447,46 @@ def _mime_type_arquivo(nome_arquivo: str) -> str:
     return "application/octet-stream"
 
 
+
+
+def _erro_api_key_invalida(erro: Exception) -> bool:
+    """Identifica erro de chave inválida retornado pela API do Gemini."""
+    msg = str(erro or "").upper()
+    return any(
+        termo in msg
+        for termo in [
+            "API_KEY_INVALID",
+            "API KEY NOT VALID",
+            "API_KEY",
+            "INVALID API KEY",
+        ]
+    )
+
+
+def _validar_gemini_key_basica(api_key: str) -> str:
+    """Validação preventiva para evitar fallback local e análises ruins quando a chave está errada."""
+    chave = str(api_key or "").strip().strip('"').strip("'")
+
+    if not chave:
+        raise ValueError(
+            "GEMINI_API_KEY não encontrada. Preencha o arquivo .env antes de analisar."
+        )
+
+    # Chaves da API Gemini/Google AI Studio normalmente começam com AIza.
+    # Tokens OAuth/client secrets não servem como GEMINI_API_KEY.
+    if not chave.startswith("AIza"):
+        raise ValueError(
+            "GEMINI_API_KEY inválida ou de tipo incorreto. Use uma chave de API do Google AI Studio/Gemini, "
+            "normalmente iniciada por 'AIza'. Não use OAuth token, Client ID ou Client Secret."
+        )
+
+    if len(chave) < 30 or " " in chave:
+        raise ValueError(
+            "GEMINI_API_KEY inválida. Confira se a chave foi copiada inteira no arquivo .env."
+        )
+
+    return chave
+
 def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -> str:
     """Prompt reforçado para quando os arquivos originais são enviados ao Gemini."""
     lista = "\n".join(f"- {nome}" for nome in nomes_arquivos) or "- Não informado"
@@ -1518,9 +1558,15 @@ def _subir_arquivos_originais_gemini(genai, arquivos_originais: Any) -> tuple[li
             uploaded_files.append(uploaded)
 
         except Exception as erro:
+            if _erro_api_key_invalida(erro):
+                raise RuntimeError(
+                    "GEMINI_API_KEY inválida. O sistema não vai continuar com análise local para não gerar resultado incorreto. "
+                    "Corrija a chave no arquivo .env e tente novamente."
+                ) from erro
+
             st.warning(
                 f"Não consegui enviar o arquivo original para a IA: {getattr(arquivo, 'name', 'arquivo')}. "
-                f"Usarei o texto extraído como apoio. Detalhe: {erro}"
+                f"Esse arquivo será analisado pelo texto extraído de apoio. Detalhe técnico: {erro}"
             )
 
     return uploaded_files, temp_paths
@@ -1545,6 +1591,7 @@ def _limpar_uploads_gemini(genai, uploaded_files: list, temp_paths: list) -> Non
 def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
     import google.generativeai as genai
 
+    api_key = _validar_gemini_key_basica(api_key)
     genai.configure(api_key=api_key)
 
     modelos = MODELOS_GEMINI.get(opcao_modelo, MODELOS_GEMINI["Automático recomendado"])
@@ -2743,7 +2790,7 @@ with st.sidebar:
     )
 
     gemini_key = os.getenv("GEMINI_API_KEY", "")
-    st.info("Modo automático recomendado ativo.")
+    st.info("Modo automático recomendado ativo. A análise usa Gemini com documentos originais quando a GEMINI_API_KEY está válida.")
 
 
 # =========================================================
@@ -3389,8 +3436,16 @@ if pagina == "📄 Nova Análise":
                     else:
                         resultado = local_extract(texto)
                 except Exception as e:
-                    st.warning(f"A IA falhou e o sistema usou análise local. Detalhe: {e}")
-                    resultado = local_extract(texto)
+                    st.error("A análise com Gemini não foi concluída.")
+                    st.warning(
+                        "O sistema NÃO usou análise local automática, porque isso pode gerar uma análise inferior "
+                        "e diferente da análise feita com os documentos originais."
+                    )
+                    st.info(
+                        "Corrija a GEMINI_API_KEY no arquivo .env e clique novamente em 'Analisar contrato e anexos'. "
+                        f"Detalhe técnico: {e}"
+                    )
+                    st.stop()
 
                 resultado["texto_extraido"] = texto
                 resultado = normalizar(resultado)
