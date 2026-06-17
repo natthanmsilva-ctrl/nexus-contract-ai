@@ -1867,14 +1867,9 @@ def _extrair_assinantes_docusign(texto: str) -> list[str]:
         prox = linhas[i + 1]
         if "@" not in prox:
             continue
-
-        # Em alguns PDFs o nome vem na mesma linha do timestamp, ex.:
-        # "Camila Araujo da Costa Sent: 5/21/2026 7:35:42 PM".
-        linha_nome = re.sub(r"\s+(Sent|Viewed|Signed):.*$", "", linha, flags=re.IGNORECASE).strip()
-
-        if "@" in linha_nome or re.search(r"\d", linha_nome):
+        if "@" in linha or re.search(r"\d", linha):
             continue
-        low_l = linha_nome.lower()
+        low_l = linha.lower()
         bloqueios = [
             "signer events", "signature timestamp", "security level", "electronic record",
             "using ip", "docusign", "not offered", "accepted", "signature adoption",
@@ -1882,11 +1877,11 @@ def _extrair_assinantes_docusign(texto: str) -> list[str]:
         ]
         if any(b in low_l for b in bloqueios):
             continue
-        # Evita cargos/áreas. Nome real costuma ter 2+ palavras.
-        palavras = re.findall(r"[A-Za-zÀ-ÿ]+", linha_nome)
+        # Evita cargos/áreas. Nome real costuma ter 2+ palavras e não termina com pontuação técnica.
+        palavras = re.findall(r"[A-Za-zÀ-ÿ]+", linha)
         if len(palavras) < 2:
             continue
-        nome = re.sub(r"\s+", " ", linha_nome).strip(" -:;,.|")
+        nome = re.sub(r"\s+", " ", linha).strip(" -:;,.|")
         if nome and nome not in nomes:
             nomes.append(nome)
     return nomes
