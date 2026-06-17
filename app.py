@@ -1428,15 +1428,57 @@ MODELOS_GEMINI = {
 
 
 def _mime_type_arquivo(nome_arquivo: str) -> str:
-    """MIME type usado no upload dos arquivos originais para o Gemini Files API."""
+    """MIME type usado no upload dos arquivos para o Gemini Files API.
+
+    Observação importante: a Files API não aceita DOCX diretamente em alguns
+    ambientes/chaves corporativas. Por isso Word é convertido para TXT antes
+    do upload e deve ir como text/plain.
+    """
     nome = str(nome_arquivo or "").lower()
     if nome.endswith(".pdf"):
         return "application/pdf"
-    if nome.endswith(".docx"):
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if nome.endswith(".doc"):
-        return "application/msword"
+    if nome.endswith((".txt", ".md")):
+        return "text/plain"
     return "application/octet-stream"
+
+
+def _arquivo_word(nome_arquivo: str) -> bool:
+    nome = str(nome_arquivo or "").lower()
+    return nome.endswith((".docx", ".doc"))
+
+
+def _preparar_upload_gemini(arquivo: Any) -> tuple[str, bytes, str, str]:
+    """Prepara arquivo para upload na Files API.
+
+    PDF segue original. Word/DOCX é convertido para um .txt estruturado, porque
+    application/vnd.openxmlformats-officedocument.wordprocessingml.document
+    não é aceito pela Files API no fluxo atual.
+
+    Retorna: nome_display, conteudo_bytes, suffix, mime_type.
+    """
+    nome = getattr(arquivo, "name", "documento")
+
+    if _arquivo_word(nome):
+        try:
+            arquivo.seek(0)
+            texto_word = ler_docx(arquivo)
+        except Exception as erro:
+            texto_word = f"Erro ao converter Word/DOCX para texto: {erro}"
+
+        texto_word = (
+            "DOCUMENTO WORD/DOCX CONVERTIDO PARA TEXTO ESTRUTURADO PARA ANÁLISE DO GEMINI\n"
+            f"ARQUIVO ORIGINAL: {nome}\n"
+            "OBSERVAÇÃO: o binário DOCX não foi enviado porque a Gemini Files API rejeita esse MIME type.\n"
+            "O conteúdo abaixo foi extraído mantendo parágrafos e tabelas quando possível.\n\n"
+            + str(texto_word or "")
+        )
+        nome_txt = f"{nome}.txt"
+        return nome_txt, texto_word.encode("utf-8", errors="ignore"), ".txt", "text/plain"
+
+    arquivo.seek(0)
+    conteudo = arquivo.read()
+    suffix = Path(nome).suffix or ".bin"
+    return nome, conteudo, suffix, _mime_type_arquivo(nome)
 
 
 def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -> str:
@@ -1447,7 +1489,7 @@ def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -
 ATENÇÃO: nesta análise você recebeu os ARQUIVOS ORIGINAIS anexados, além do texto extraído como apoio técnico.
 
 COMO ANALISAR
-1. Use os arquivos originais como fonte principal.
+1. Use os arquivos originais como fonte principal. Quando o arquivo for Word/DOCX, ele pode ter sido convertido para TXT estruturado por limitação de MIME da Files API; nesse caso, use esse TXT como representação fiel do Word.
 2. Navegue visualmente pelos documentos, páginas, anexos, tabelas, propostas comerciais, comentários, imagens e certificados de assinatura.
 3. Entenda a relação entre contrato principal, termo aditivo, proposta comercial, proposta técnica, orçamento, e-mail de aprovação e certificado DocuSign.
 4. Quando houver documento assinado/DocuSign, priorize a versão assinada sobre minutas, versões antigas ou arquivos com comentários.
@@ -1464,24 +1506,34 @@ ARQUIVOS ORIGINAIS RECEBIDOS:
 
 
 def _subir_arquivos_originais_gemini(client, arquivos_originais: Any) -> tuple[list, list, list]:
-    """Salva temporariamente e envia os arquivos originais usando google-genai >= 2.x.
+    """Salva temporariamente e envia arquivos usando google-genai >= 2.x.
 
-    Esta versão não usa google.generativeai.upload_file(), portanto evita o Google
-    Discovery Service que rejeitava chaves corporativas no formato AQ....
+    PDF é enviado como arquivo original. DOC/DOCX é convertido para TXT antes
+    do upload, porque a Files API retornou INVALID_ARGUMENT para o MIME type
+    application/vnd.openxmlformats-officedocument.wordprocessingml.document.
+    Assim, um DOCX não derruba a análise inteira nem força fallback para texto.
     """
     uploaded_files = []
     temp_paths = []
-    erros_upload = []
+    avisos_upload = []
 
     if not arquivos_originais:
-        return uploaded_files, temp_paths, erros_upload
+        return uploaded_files, temp_paths, avisos_upload
 
     for arquivo in arquivos_originais:
-        nome = getattr(arquivo, "name", "documento")
+        nome_original = getattr(arquivo, "name", "documento")
         try:
-            arquivo.seek(0)
-            conteudo = arquivo.read()
-            suffix = Path(nome).suffix or ".bin"
+            nome_upload, conteudo, suffix, mime = _preparar_upload_gemini(arquivo)
+
+            if not conteudo:
+                avisos_upload.append(f"{nome_original}: arquivo vazio ou sem conteúdo extraível.")
+                continue
+
+            if _arquivo_word(nome_original):
+                avisos_upload.append(
+                    f"{nome_original}: DOC/DOCX convertido para TXT estruturado antes do upload "
+                    "porque a Files API não aceitou o MIME type do Word."
+                )
 
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
             tmp.write(conteudo)
@@ -1492,8 +1544,8 @@ def _subir_arquivos_originais_gemini(client, arquivos_originais: Any) -> tuple[l
             uploaded = client.files.upload(
                 file=tmp.name,
                 config={
-                    "mime_type": _mime_type_arquivo(nome),
-                    "display_name": nome,
+                    "mime_type": mime,
+                    "display_name": nome_upload,
                 },
             )
 
@@ -1509,9 +1561,9 @@ def _subir_arquivos_originais_gemini(client, arquivos_originais: Any) -> tuple[l
             uploaded_files.append(uploaded)
 
         except Exception as erro:
-            erros_upload.append(f"{nome}: {erro}")
+            avisos_upload.append(f"{nome_original}: {erro}")
 
-    return uploaded_files, temp_paths, erros_upload
+    return uploaded_files, temp_paths, avisos_upload
 
 
 def _limpar_uploads_gemini(client, uploaded_files: list, temp_paths: list) -> None:
@@ -1607,8 +1659,8 @@ def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_origin
             uploaded_files, temp_paths, erros_upload = _subir_arquivos_originais_gemini(client, arquivos_originais)
 
             if erros_upload:
-                with st.expander("⚠️ Detalhes de upload de arquivos para o Gemini", expanded=False):
-                    st.write("Alguns arquivos não foram enviados para a Files API:")
+                with st.expander("⚠️ Detalhes de preparação/upload dos arquivos para o Gemini", expanded=False):
+                    st.write("Avisos do envio para a Files API:")
                     for erro in erros_upload:
                         st.write(f"- {erro}")
 
@@ -1621,7 +1673,7 @@ def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_origin
                             resultado_json["modelo_ia"] = nome
                             resultado_json["modo_analise_ia"] = "Documentos originais + texto extraído"
                             resultado_json["arquivos_originais_enviados"] = len(uploaded_files)
-                        st.success(f"IA utilizada: {nome} • documentos originais analisados")
+                        st.success(f"IA utilizada: {nome} • documentos/anexos analisados pela Files API")
                         return resultado_json
                     except Exception as e:
                         ultimo_erro_multimodal = e
