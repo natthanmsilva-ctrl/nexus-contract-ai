@@ -686,18 +686,8 @@ def _inferir_tipo_item(descricao: Any) -> str:
     return "Material"
 
 
-def _valor_informado(valor: Any) -> bool:
-    txt = clean_text(valor)
-    return txt not in ("", "Não localizado", "Não localizada", "N/A", "None", "nan")
-
-
 def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
-    """Padroniza materiais/serviços vindos da IA ou da extração local.
-
-    Importante: contratos de serviço nem sempre possuem valor unitário em R$.
-    Exemplo: mão de obra temporária pode vir com Taxa, Total de Encargos e Vencimento.
-    Por isso a tabela aceita campos comerciais complementares sem forçar tudo como material.
-    """
+    """Padroniza materiais/serviços vindos da IA ou da extração local."""
     if not isinstance(itens, list):
         return []
 
@@ -717,17 +707,9 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         mapa = {chave_norm(k): v for k, v in item_dict.items()}
         for alias in aliases:
             nk = chave_norm(alias)
-            if nk in mapa and _valor_informado(mapa[nk]):
+            if nk in mapa and mapa[nk] not in (None, "", [], {}, "Não localizado", "Não localizada"):
                 return mapa[nk]
         return padrao
-
-    def limpar_percentual(valor: Any) -> str:
-        txt = clean_text(valor)
-        if not _valor_informado(txt):
-            return "Não localizado"
-        if re.fullmatch(r"\d+(?:[\.,]\d+)?", txt):
-            return txt.replace(".", ",") + "%"
-        return txt
 
     normalizados: List[Dict[str, Any]] = []
 
@@ -750,22 +732,6 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         tipo = clean_text(pegar(item, ["tipo", "categoria"], _inferir_tipo_item(descricao)))
         quantidade = clean_text(pegar(item, ["quantidade", "qtde", "qtd", "qtd.", "quant.", "volume"]))
         unidade = clean_text(pegar(item, ["unidade", "un", "uom", "und", "medida", "unid"]))
-
-        taxa_percentual = limpar_percentual(pegar(item, [
-            "taxa", "taxa_percentual", "percentual", "percentual_taxa", "%", "aliquota", "alíquota",
-            "taxa_de_agenciamento", "taxa agenciamento", "taxa administrativa", "taxa_admin"
-        ]))
-
-        total_encargos = limpar_percentual(pegar(item, [
-            "total_encargos", "total de encargos", "encargos", "encargos_sociais",
-            "total_encargos_sociais", "total de encargos sociais", "custo_encargos"
-        ]))
-
-        vencimento = clean_text(pegar(item, [
-            "vencimento", "prazo", "prazo_pagamento", "condicao_pagamento", "condição pagamento",
-            "pagamento", "vencimento_nota", "vencimento_nf"
-        ]))
-
         valor_unitario = clean_text(pegar(item, [
             "valor_unitario", "valor_unitário", "valor unitario", "valor unitário",
             "Valor Unitário (R$)", "valor_unitario_rs", "preco_unitario",
@@ -777,7 +743,6 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         ]))
         fonte = clean_text(pegar(item, ["fonte", "origem", "documento", "arquivo", "pagina", "página"], "Contrato/anexo"))
 
-        # Não transforme taxa/encargos em valor unitário. Eles são condições comerciais.
         normalizados.append({
             "Item": clean_text(pegar(item, ["item", "numero", "número", "n", "id"], idx)),
             "Descrição": resumir_campo(descricao, 420),
@@ -786,54 +751,8 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
             "Unidade": unidade,
             "Valor unitário": valor_unitario,
             "Valor total": valor_total,
-            "Taxa / Percentual": taxa_percentual,
-            "Total de encargos": total_encargos,
-            "Vencimento / Prazo": vencimento,
             "Fonte": fonte,
         })
-
-    # Regra especial: se a IA devolveu uma linha "Taxa de Agenciamento" e outra "Encargos Sociais",
-    # consolidamos em uma única linha de serviço para mão de obra temporária.
-    descricoes = " ".join(str(i.get("Descrição", "")) for i in normalizados).lower()
-    tem_taxa = any(_valor_informado(i.get("Taxa / Percentual")) or "taxa" in str(i.get("Descrição", "")).lower() for i in normalizados)
-    tem_encargo = any(_valor_informado(i.get("Total de encargos")) or "encargo" in str(i.get("Descrição", "")).lower() for i in normalizados)
-    mao_obra = "mão de obra" in descricoes or "mao de obra" in descricoes or "temporári" in descricoes or "temporari" in descricoes
-
-    if mao_obra and tem_taxa and tem_encargo and len(normalizados) <= 5:
-        taxa = "Não localizado"
-        encargos = "Não localizado"
-        vencimento = "Não localizado"
-        fonte = "Contrato/anexo"
-        for item in normalizados:
-            desc_low = str(item.get("Descrição", "")).lower()
-            if not _valor_informado(taxa):
-                if _valor_informado(item.get("Taxa / Percentual")):
-                    taxa = item.get("Taxa / Percentual")
-                elif "taxa" in desc_low and _valor_informado(item.get("Valor unitário")):
-                    taxa = item.get("Valor unitário")
-            if not _valor_informado(encargos):
-                if _valor_informado(item.get("Total de encargos")):
-                    encargos = item.get("Total de encargos")
-                elif "encargo" in desc_low and _valor_informado(item.get("Valor unitário")):
-                    encargos = item.get("Valor unitário")
-            if not _valor_informado(vencimento) and _valor_informado(item.get("Vencimento / Prazo")):
-                vencimento = item.get("Vencimento / Prazo")
-            if _valor_informado(item.get("Fonte")):
-                fonte = item.get("Fonte")
-
-        return [{
-            "Item": "1",
-            "Descrição": "Mão de obra temporária",
-            "Tipo": "Serviço",
-            "Quantidade": "Não localizado",
-            "Unidade": "Não localizado",
-            "Valor unitário": "Não localizado",
-            "Valor total": "Não localizado",
-            "Taxa / Percentual": taxa,
-            "Total de encargos": encargos,
-            "Vencimento / Prazo": vencimento,
-            "Fonte": fonte,
-        }]
 
     return normalizados
 
@@ -1208,7 +1127,7 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Valor do Contrato Original = valor_contrato_original
 
 TABELA DE ITENS OBRIGATÓRIA
-Também retorne a chave itens_contrato como lista. Cada item deve conter, quando aplicável:
+Também retorne a chave itens_contrato como lista. Cada item deve conter exatamente:
 - item
 - descricao
 - tipo
@@ -1216,18 +1135,7 @@ Também retorne a chave itens_contrato como lista. Cada item deve conter, quando
 - unidade
 - valor_unitario
 - valor_total
-- taxa_percentual
-- total_encargos
-- vencimento
 - fonte
-
-Para propostas de mão de obra temporária ou serviço sem preço unitário em R$:
-- NÃO crie uma linha separada para "taxa de agenciamento" e outra para "encargos sociais".
-- Crie UMA linha principal com descricao = "Mão de obra temporária" ou o serviço equivalente.
-- Preencha taxa_percentual com a taxa de agenciamento, exemplo "7%".
-- Preencha total_encargos com o percentual/total de encargos, exemplo "59,08%".
-- Preencha vencimento com o prazo de pagamento, exemplo "30 dias após emissão da nota fiscal".
-- Deixe valor_unitario e valor_total como "Não localizado" quando não houver valor em R$.
 
 REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 1. Não invente dados. Se não encontrar, retorne "Não localizado".
@@ -1273,7 +1181,6 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 37. tipo deve ser "Material" ou "Serviço".
 38. fonte deve indicar de onde veio o item, exemplo: "Contrato", "Anexo", "Proposta" ou "Orçamento".
 39. Se não houver tabela de itens, retorne itens_contrato como lista vazia [].
-40. Para contratos de mão de obra temporária, taxa de agenciamento, folha de pagamento, encargos sociais ou MCT/Mão de Obra: consolide as condições em um único serviço principal. Não trate taxa e encargos como materiais separados.
 
 PADRÃO ESPERADO PARA ESTE TIPO DE CONTRATO
 Se o texto indicar contrato de prestação de serviços de substituição/fornecimento de baterias de nobreaks:
@@ -2226,25 +2133,10 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
     itens = normalizar_itens_contrato(resultado.get("itens_contrato", []))
     st.markdown(f'<div class="section-title">{safe(titulo)}</div>', unsafe_allow_html=True)
     if not itens:
-        st.info("Nenhum material, serviço ou condição comercial unitária foi identificado no contrato/anexos.")
+        st.info("Nenhum material ou serviço unitário foi identificado com valor unitário no contrato/anexos.")
         return
 
     df_itens = pd.DataFrame(itens)
-
-    # Mostra colunas complementares somente quando houver informação real.
-    colunas_base = ["Item", "Descrição", "Tipo", "Quantidade", "Unidade", "Valor unitário", "Valor total"]
-    colunas_opcionais = ["Taxa / Percentual", "Total de encargos", "Vencimento / Prazo"]
-    colunas_finais = [c for c in colunas_base if c in df_itens.columns]
-
-    for col in colunas_opcionais:
-        if col in df_itens.columns and df_itens[col].apply(_valor_informado).any():
-            colunas_finais.append(col)
-
-    if "Fonte" in df_itens.columns:
-        colunas_finais.append("Fonte")
-
-    df_itens = df_itens[colunas_finais]
-
     st.dataframe(
         df_itens,
         use_container_width=True,
@@ -2253,10 +2145,6 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
             "Descrição": st.column_config.TextColumn("Descrição", width="large"),
             "Valor unitário": st.column_config.TextColumn("Valor unitário"),
             "Valor total": st.column_config.TextColumn("Valor total"),
-            "Taxa / Percentual": st.column_config.TextColumn("Taxa / Percentual"),
-            "Total de encargos": st.column_config.TextColumn("Total de encargos"),
-            "Vencimento / Prazo": st.column_config.TextColumn("Vencimento / Prazo", width="medium"),
-            "Fonte": st.column_config.TextColumn("Fonte", width="medium"),
         },
     )
 
