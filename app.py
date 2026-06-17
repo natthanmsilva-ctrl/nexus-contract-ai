@@ -1589,62 +1589,59 @@ def _limpar_uploads_gemini(genai, uploaded_files: list, temp_paths: list) -> Non
 
 
 def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
+    """Versão compatível com a chave usada anteriormente.
+
+    IMPORTANTE:
+    - Não usa Gemini Files API / upload_file.
+    - Envia para a IA somente o texto extraído dos PDFs/DOCX.
+    - Se a chave não for aceita pela API, a exceção é tratada na tela principal
+      e o sistema usa a extração local reforçada, sem travar o usuário.
+    """
     import google.generativeai as genai
 
-    api_key = _validar_gemini_key_basica(api_key)
+    api_key = str(api_key or "").strip().strip('"').strip("'")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY não encontrada no arquivo .env.")
+
     genai.configure(api_key=api_key)
-
     modelos = MODELOS_GEMINI.get(opcao_modelo, MODELOS_GEMINI["Automático recomendado"])
-    uploaded_files, temp_paths = _subir_arquivos_originais_gemini(genai, arquivos_originais)
-    nomes_arquivos = [getattr(a, "name", "documento") for a in (arquivos_originais or [])]
-    prompt_final = _prompt_ia_com_documentos_originais(texto, nomes_arquivos) if uploaded_files else prompt_ia(texto)
-
     ultimo_erro = None
 
-    try:
-        for nome in modelos:
-            try:
-                model = genai.GenerativeModel(nome)
-                conteudo = [prompt_final] + uploaded_files if uploaded_files else prompt_final
+    for nome in modelos:
+        try:
+            model = genai.GenerativeModel(nome)
+            resp = model.generate_content(
+                prompt_ia(texto),
+                generation_config={
+                    "temperature": 0.0,
+                    "top_p": 0.2,
+                    "response_mime_type": "application/json",
+                },
+            )
 
-                resp = model.generate_content(
-                    conteudo,
-                    generation_config={
-                        "temperature": 0.0,
-                        "top_p": 0.2,
-                        "response_mime_type": "application/json",
-                    },
-                )
+            content = (
+                resp.text
+                .strip()
+                .replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
 
-                content = (
-                    resp.text
-                    .strip()
-                    .replace("```json", "")
-                    .replace("```", "")
-                    .strip()
-                )
+            st.success(f"IA utilizada: {nome} • texto extraído analisado")
+            resultado_json = json.loads(content)
+            if isinstance(resultado_json, dict):
+                resultado_json["modelo_ia"] = nome
+                resultado_json["modo_analise_ia"] = "Texto extraído"
+            return resultado_json
 
-                if uploaded_files:
-                    st.success(f"IA utilizada: {nome} • documentos originais analisados")
-                else:
-                    st.success(f"IA utilizada: {nome} • texto extraído analisado")
+        except Exception as e:
+            ultimo_erro = e
+            if opcao_modelo != "Automático recomendado":
+                raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
+            continue
 
-                resultado_json = json.loads(content)
-                if isinstance(resultado_json, dict):
-                    resultado_json["modelo_ia"] = nome
-                    resultado_json["modo_analise_ia"] = "Documentos originais + texto extraído" if uploaded_files else "Texto extraído"
-                return resultado_json
+    raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
 
-            except Exception as e:
-                ultimo_erro = e
-                if opcao_modelo != "Automático recomendado":
-                    raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
-                continue
-
-        raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
-
-    finally:
-        _limpar_uploads_gemini(genai, uploaded_files, temp_paths)
 
 def formatar_cnpj(valor: Any) -> str:
     txt = clean_text(valor)
@@ -1704,6 +1701,131 @@ def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
     base["itens_contrato"] = normalizar_itens_contrato(base.get("itens_contrato", []))
     return base
 
+
+
+def _formatar_data_docusign(raw: str) -> str:
+    """Converte datas comuns do certificado DocuSign para dd/mm/aaaa."""
+    txt = clean_text(raw)
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", txt)
+    if m:
+        mes, dia, ano = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
+        return f"{dia}/{mes}/{ano}"
+    m = re.search(r"\b(\d{1,2})-(\d{1,2})-(\d{4})\b", txt)
+    if m:
+        mes, dia, ano = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
+        return f"{dia}/{mes}/{ano}"
+    return txt or "Não localizada"
+
+
+def extrair_docusign_local(texto: str) -> Dict[str, Any]:
+    """Identifica contrato assinado pelo certificado/rodapé DocuSign no texto extraído.
+
+    Corrige o erro de tratar minuta como pendente quando existe arquivo assinado
+    ou certificado de conclusão no pacote documental.
+    """
+    texto = texto or ""
+    low = texto.lower()
+    tem_docusign = any(t in low for t in [
+        "docusign envelope id",
+        "certificate of completion",
+        "envelope summary events",
+        "signer events signature timestamp",
+        "electronic record and signature disclosure",
+    ])
+    concluido = any(t in low for t in [
+        "status: completed",
+        "completed security checked",
+        "signing complete security checked",
+        "certificate of completion",
+    ])
+    assinado = tem_docusign and concluido
+
+    datas = []
+    for padrao in [
+        r"Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4}(?:\s+\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?)?)",
+        r"Signing\s+Complete\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4}(?:\s+\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?)?)",
+        r"Signed:\s*(\d{1,2}/\d{1,2}/\d{4}(?:\s+\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?)?)",
+        r"São Paulo,\s*(\d{1,2}\s+de\s+[a-zç]+\s+de\s+\d{4})",
+    ]:
+        for m in re.finditer(padrao, texto, re.IGNORECASE):
+            datas.append(m.group(1))
+
+    data_ass = _formatar_data_docusign(datas[-1]) if datas else "Não localizada"
+
+    assinantes = []
+    # Captura nomes próximos aos eventos de assinatura sem expor e-mails como nomes.
+    bloco = texto
+    if "Signer Events" in texto:
+        bloco = texto[texto.find("Signer Events"):]
+    for linha in bloco.splitlines():
+        linha_limpa = clean_text(linha)
+        if not linha_limpa or "@" in linha_limpa or len(linha_limpa) > 90:
+            continue
+        if re.search(r"\b(Security Level|Sent:|Viewed:|Signed:|Using IP|Electronic Record|Timestamp|Status|Envelope|Completed|Certified|Payment Events|Witness Events)\b", linha_limpa, re.IGNORECASE):
+            continue
+        if re.search(r"^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-Za-zÁÉÍÓÚÂÊÔÃÕÇáéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-Za-zÁÉÍÓÚÂÊÔÃÕÇáéíóúâêôãõç]+){1,5}$", linha_limpa):
+            if linha_limpa not in assinantes:
+                assinantes.append(linha_limpa)
+        if len(assinantes) >= 12:
+            break
+
+    return {
+        "tem_docusign": tem_docusign,
+        "docusign_concluido": concluido,
+        "contrato_assinado_docusign": "Sim" if assinado else "Não",
+        "data_assinatura_docusign": data_ass,
+        "assinantes_docusign": assinantes,
+    }
+
+
+def aplicar_docusign_no_resultado(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
+    info = extrair_docusign_local(texto)
+    if not info.get("tem_docusign"):
+        return base
+
+    base["docusign"] = info
+
+    if info.get("contrato_assinado_docusign") == "Sim":
+        base["contrato_assinado"] = "Sim"
+        base["assinatura"] = "Localizada via DocuSign"
+        base["alerta_assinatura"] = "Contrato assinado eletronicamente via DocuSign. Certificado de conclusão localizado no pacote documental."
+        if info.get("data_assinatura_docusign") and info.get("data_assinatura_docusign") != "Não localizada":
+            base["data_assinatura"] = info.get("data_assinatura_docusign")
+
+        status_atual = clean_text(base.get("status")).lower()
+        if any(t in status_atual for t in ["pendente de assinatura", "sem assinatura", "em negociação", "negociacao", "pendente"]):
+            base["status"] = "Ativo / Assinado"
+
+        # Remove pendências criadas somente por assinatura ausente.
+        pendencias = []
+        for p in base.get("pendencias", []) or []:
+            if isinstance(p, dict):
+                txt = " ".join(str(v) for v in p.values()).lower()
+                if any(t in txt for t in ["assinatura", "assinado", "docusign"]):
+                    continue
+            pendencias.append(p)
+        base["pendencias"] = pendencias
+
+        for item in base.get("checklist", []) or []:
+            if isinstance(item, dict):
+                valid = str(item.get("Validação") or item.get("validacao") or "").lower()
+                if "assin" in valid or "docusign" in valid:
+                    item["Status"] = "Concluído"
+                    item["Peso de risco"] = 0
+                    item["Crítico"] = "Não"
+                    item["Evidência"] = "Certificado de conclusão DocuSign localizado."
+
+        try:
+            score = int(float(str(base.get("score", 0)).replace(",", ".")))
+            # Se a única razão de risco era assinatura, reduz um pouco o score.
+            base["score"] = max(0, score - 20)
+            base["risco"] = "BAIXO" if base["score"] <= 25 else "MÉDIO" if base["score"] <= 60 else "ALTO"
+        except Exception:
+            pass
+
+    return base
+
+
 def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
     base = local_extract("")
     base.update(resultado or {})
@@ -1742,6 +1864,7 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         base["pendencias"] = []
 
     texto_fallback = resultado.get("texto_extraido") if isinstance(resultado, dict) else ""
+    base = aplicar_docusign_no_resultado(base, str(texto_fallback or ""))
     itens_ia = normalizar_itens_contrato(base.get("itens_contrato", []))
     itens_servico_percentual = detectar_servico_percentual(str(texto_fallback or ""))
 
@@ -3436,16 +3559,14 @@ if pagina == "📄 Nova Análise":
                     else:
                         resultado = local_extract(texto)
                 except Exception as e:
-                    st.error("A análise com Gemini não foi concluída.")
                     st.warning(
-                        "O sistema NÃO usou análise local automática, porque isso pode gerar uma análise inferior "
-                        "e diferente da análise feita com os documentos originais."
+                        "A análise com Gemini não foi concluída. Vou seguir com a versão compatível anterior: "
+                        "texto extraído + regras de auditoria + leitura DocuSign."
                     )
-                    st.info(
-                        "Corrija a GEMINI_API_KEY no arquivo .env e clique novamente em 'Analisar contrato e anexos'. "
-                        f"Detalhe técnico: {e}"
-                    )
-                    st.stop()
+                    st.caption(f"Detalhe técnico: {e}")
+                    resultado = local_extract(texto)
+                    resultado["modelo_ia"] = "Análise Local reforçada"
+                    resultado["modo_analise_ia"] = "Texto extraído + regras locais"
 
                 resultado["texto_extraido"] = texto
                 resultado = normalizar(resultado)
