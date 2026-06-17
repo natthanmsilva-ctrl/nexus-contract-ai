@@ -2390,9 +2390,14 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Contraparte", contraparte),
         ("CNPJ Contraparte", cnpj_contraparte),
         ("Valor do Contrato", valor_contrato),
+        ("Valor Mensal Estimado", v("valor_mensal_estimado")),
+        ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Condição de Pagamento", pagamento),
         ("Vigência", vigencia),
         ("Data da Assinatura", data_assinatura),
+        ("Data do Contrato", v("data_contrato")),
+        ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
+        ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
         ("Origem", origem),
         ("Modelo IA", modelo_ia),
@@ -2652,8 +2657,10 @@ def _resumir_arquivos_excel(valor: Any) -> str:
 def _preparar_historico_excel(df: pd.DataFrame) -> pd.DataFrame:
     """Padroniza colunas do histórico para exportação executiva."""
     colunas = [
-        "ID", "Data da análise", "Contraparte", "CNPJ", "Valor total", "Vigência",
-        "Status", "Risco", "Score", "Assinado", "Modelo IA", "Origem", "Arquivos analisados",
+        "ID", "Data da análise", "Contraparte", "CNPJ", "Valor total",
+        "Valor mensal estimado", "Valor total estimado da vigência",
+        "Data do contrato", "Data conclusão DocuSign", "Pessoas que assinaram",
+        "Vigência", "Status", "Risco", "Score", "Assinado", "Modelo IA", "Origem", "Arquivos analisados",
     ]
     base = df.copy() if df is not None else pd.DataFrame(columns=colunas)
     for col in colunas:
@@ -2814,14 +2821,18 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
         last_row = start_row + total_filtrado
         # Mantém filtro sem criar Tabela estruturada do Excel.
         # Isso evita erro de reparo em /xl/tables/table1.xml ao abrir o arquivo.
-        ws.auto_filter.ref = f"A{start_row}:M{last_row}"
+        ultima_coluna = get_column_letter(len(df.columns))
+        ws.auto_filter.ref = f"A{start_row}:{ultima_coluna}{last_row}"
 
     widths = {
-        "A": 9, "B": 19, "C": 36, "D": 19, "E": 17, "F": 48,
-        "G": 16, "H": 13, "I": 10, "J": 13, "K": 18, "L": 15, "M": 28,
+        "A": 9, "B": 19, "C": 34, "D": 19, "E": 17,
+        "F": 22, "G": 25, "H": 18, "I": 22, "J": 46,
+        "K": 34, "L": 16, "M": 13, "N": 10, "O": 13,
+        "P": 18, "Q": 15, "R": 28,
     }
-    for col, width in widths.items():
-        ws.column_dimensions[col].width = width
+    for idx_col in range(1, len(df.columns) + 1):
+        col_letter = get_column_letter(idx_col)
+        ws.column_dimensions[col_letter].width = widths.get(col_letter, 20)
 
     # =====================================================
     # ABA 3 - AUDITORIA
@@ -4063,17 +4074,51 @@ if pagina == "📚 Histórico":
     # -------------------------
     # Exportação filtrada
     # -------------------------
+    filtrado_export = filtrado.copy()
+
+    # Campos novos ficam dentro do resultado_json no histórico. Aqui extraímos para o Excel.
+    def _hist_json_val(row, chave: str, padrao: str = "Não informado") -> str:
+        try:
+            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
+            valor = payload.get(chave, padrao)
+            if valor in (None, "", [], {}, "Não localizado", "Não localizada"):
+                return padrao
+            if isinstance(valor, (list, dict)):
+                return json.dumps(valor, ensure_ascii=False)
+            return str(valor)
+        except Exception:
+            return padrao
+
+    if "resultado_json" in filtrado_export.columns:
+        campos_json_excel = {
+            "valor_mensal_estimado": "valor_mensal_estimado",
+            "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
+            "data_contrato": "data_contrato",
+            "data_conclusao_docusign": "data_conclusao_docusign",
+            "pessoas_que_assinaram": "pessoas_que_assinaram",
+        }
+        for destino, chave_json in campos_json_excel.items():
+            if destino not in filtrado_export.columns:
+                filtrado_export[destino] = filtrado_export.apply(lambda row, ch=chave_json: _hist_json_val(row, ch), axis=1)
+
     export_cols = [
-        "id", "data_analise", "fornecedor", "cnpj", "valor_total", "vigencia",
-        "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
+        "id", "data_analise", "fornecedor", "cnpj", "valor_total",
+        "valor_mensal_estimado", "valor_total_estimado_vigencia",
+        "data_contrato", "data_conclusao_docusign", "pessoas_que_assinaram",
+        "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
     ]
-    export_df = filtrado[[c for c in export_cols if c in filtrado.columns]].copy()
+    export_df = filtrado_export[[c for c in export_cols if c in filtrado_export.columns]].copy()
     export_df = export_df.rename(columns={
         "id": "ID",
         "data_analise": "Data da análise",
         "fornecedor": "Contraparte",
         "cnpj": "CNPJ",
         "valor_total": "Valor total",
+        "valor_mensal_estimado": "Valor mensal estimado",
+        "valor_total_estimado_vigencia": "Valor total estimado da vigência",
+        "data_contrato": "Data do contrato",
+        "data_conclusao_docusign": "Data conclusão DocuSign",
+        "pessoas_que_assinaram": "Pessoas que assinaram",
         "vigencia": "Vigência",
         "status": "Status",
         "risco": "Risco",
