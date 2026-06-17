@@ -11,6 +11,9 @@ import re
 import json
 import html
 import base64
+import tempfile
+import time
+from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -686,8 +689,129 @@ def _inferir_tipo_item(descricao: Any) -> str:
     return "Material"
 
 
+def _valor_informado(valor: Any) -> bool:
+    txt = clean_text(valor)
+    return txt not in ("", "Não localizado", "Não localizada", "N/A", "None", "nan")
+
+
+def _limpar_percentual_global(valor: Any) -> str:
+    txt = clean_text(valor)
+    if not _valor_informado(txt):
+        return "Não localizado"
+    txt = txt.replace(" %", "%").strip()
+    if re.fullmatch(r"\d+(?:[\.,]\d+)?", txt):
+        return txt.replace(".", ",") + "%"
+    return txt
+
+
+def detectar_servico_percentual(texto: str) -> List[Dict[str, Any]]:
+    """Detecta propostas de serviço percentual, como mão de obra temporária.
+
+    Nestes casos, taxa e encargos não são itens separados: são condições
+    comerciais do serviço principal.
+    """
+    texto_original = str(texto or "")
+    if not texto_original.strip():
+        return []
+
+    plano_completo = re.sub(r"\s+", " ", texto_original).strip()
+    low = plano_completo.lower()
+
+    gatilhos = [
+        "mão de obra temporária", "mao de obra temporaria",
+        "mão-de-obra temporária", "mao-de-obra temporaria",
+        "proposta de mão de obra", "proposta de mao de obra",
+    ]
+    if not any(g in low for g in gatilhos):
+        return []
+
+    # Foca no bloco comercial. Isso evita capturar "serviços prestados" do texto institucional.
+    pos = low.find("dados da proposta")
+    plano = plano_completo[pos:] if pos >= 0 else plano_completo
+
+    def primeiro_valor(captura: Any) -> str:
+        txt = clean_text(captura).strip(" -:;,.|/")
+        partes = [p.strip(" -:;,.|/") for p in txt.split("|") if p.strip(" -:;,.|/")]
+        if not partes:
+            return txt
+        # remove duplicidades preservando ordem
+        vistos_local = []
+        for parte in partes:
+            if parte.lower() not in [v.lower() for v in vistos_local]:
+                vistos_local.append(parte)
+        return vistos_local[0] if vistos_local else txt
+
+    servico = "Mão de Obra Temporária"
+    m_serv = re.search(
+        r"Servi[cç]o\s*:?\s*(?:\|\s*)?(.+?)(?=\s+\|?\s*Taxa\s*:|\s+\|?\s*Total\s+de\s+Encargos|\s+\|?\s*Vencimento\s*:|\s+\|?\s*Exame\s*:|\s+\|?\s*Observa[cç]|$)",
+        plano,
+        flags=re.IGNORECASE,
+    )
+    if m_serv:
+        capturado = primeiro_valor(m_serv.group(1))
+        if 3 <= len(capturado) <= 120:
+            servico = capturado
+
+    taxa = "Não localizado"
+    m_taxa = re.search(r"Taxa\s*:?\s*(?:\|\s*)?(\d+(?:[\.,]\d+)?\s*%)", plano, flags=re.IGNORECASE)
+    if m_taxa:
+        taxa = _limpar_percentual_global(m_taxa.group(1))
+
+    encargos = "Não localizado"
+    m_enc = re.search(r"Total\s+de\s+Encargos\s*:?\s*(?:\|\s*)?(\d+(?:[\.,]\d+)?\s*%)", plano, flags=re.IGNORECASE)
+    if m_enc:
+        encargos = _limpar_percentual_global(m_enc.group(1))
+
+    vencimento = "Não localizado"
+    m_venc = re.search(
+        r"Vencimento\s*:?\s*(?:\|\s*)?(.+?)(?=\s+\|?\s*Exame\s*:|\s+\|?\s*Observa[cç]|\s+\|?\s*Representante|\s+DA RESPONSABILIDADE|$)",
+        plano,
+        flags=re.IGNORECASE,
+    )
+    if m_venc:
+        venc = primeiro_valor(m_venc.group(1))
+        if venc:
+            vencimento = resumir_campo(venc, 120)
+
+    # Só considera como caso especial se houver pelo menos taxa ou encargos.
+    if not (_valor_informado(taxa) or _valor_informado(encargos)):
+        return []
+
+    return [{
+        "item": "1",
+        "descricao": servico,
+        "tipo": "Serviço",
+        "quantidade": "Não aplicável",
+        "unidade": "Não aplicável",
+        "valor_unitario": "Não aplicável",
+        "valor_total": "Não localizado",
+        "taxa_percentual": taxa,
+        "total_encargos": encargos,
+        "vencimento": vencimento,
+        "fonte": "Proposta comercial",
+    }]
+
+
+def _itens_sao_apenas_atributos_comerciais(itens: List[Dict[str, Any]]) -> bool:
+    if not itens:
+        return False
+    termos_atributo = [
+        "taxa", "encargo", "imposto", "percentual", "comissão", "comissao",
+        "vencimento", "pagamento", "pis", "cofins", "inss", "iss", "icms",
+    ]
+    descricoes = [str(i.get("Descrição") or i.get("descricao") or "").lower() for i in itens]
+    if not descricoes:
+        return False
+    return all(any(t in d for t in termos_atributo) for d in descricoes)
+
+
 def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
-    """Padroniza materiais/serviços vindos da IA ou da extração local."""
+    """Padroniza materiais/serviços vindos da IA ou da extração local.
+
+    Importante: contratos de serviço nem sempre possuem valor unitário em R$.
+    Exemplo: mão de obra temporária pode vir com Taxa, Total de Encargos e Vencimento.
+    Por isso a tabela aceita campos comerciais complementares sem forçar tudo como material.
+    """
     if not isinstance(itens, list):
         return []
 
@@ -707,9 +831,17 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         mapa = {chave_norm(k): v for k, v in item_dict.items()}
         for alias in aliases:
             nk = chave_norm(alias)
-            if nk in mapa and mapa[nk] not in (None, "", [], {}, "Não localizado", "Não localizada"):
+            if nk in mapa and _valor_informado(mapa[nk]):
                 return mapa[nk]
         return padrao
+
+    def limpar_percentual(valor: Any) -> str:
+        txt = clean_text(valor)
+        if not _valor_informado(txt):
+            return "Não localizado"
+        if re.fullmatch(r"\d+(?:[\.,]\d+)?", txt):
+            return txt.replace(".", ",") + "%"
+        return txt
 
     normalizados: List[Dict[str, Any]] = []
 
@@ -732,6 +864,22 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         tipo = clean_text(pegar(item, ["tipo", "categoria"], _inferir_tipo_item(descricao)))
         quantidade = clean_text(pegar(item, ["quantidade", "qtde", "qtd", "qtd.", "quant.", "volume"]))
         unidade = clean_text(pegar(item, ["unidade", "un", "uom", "und", "medida", "unid"]))
+
+        taxa_percentual = limpar_percentual(pegar(item, [
+            "taxa", "taxa_percentual", "percentual", "percentual_taxa", "%", "aliquota", "alíquota",
+            "taxa_de_agenciamento", "taxa agenciamento", "taxa administrativa", "taxa_admin"
+        ]))
+
+        total_encargos = limpar_percentual(pegar(item, [
+            "total_encargos", "total de encargos", "encargos", "encargos_sociais",
+            "total_encargos_sociais", "total de encargos sociais", "custo_encargos"
+        ]))
+
+        vencimento = clean_text(pegar(item, [
+            "vencimento", "prazo", "prazo_pagamento", "condicao_pagamento", "condição pagamento",
+            "pagamento", "vencimento_nota", "vencimento_nf"
+        ]))
+
         valor_unitario = clean_text(pegar(item, [
             "valor_unitario", "valor_unitário", "valor unitario", "valor unitário",
             "Valor Unitário (R$)", "valor_unitario_rs", "preco_unitario",
@@ -743,6 +891,7 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         ]))
         fonte = clean_text(pegar(item, ["fonte", "origem", "documento", "arquivo", "pagina", "página"], "Contrato/anexo"))
 
+        # Não transforme taxa/encargos em valor unitário. Eles são condições comerciais.
         normalizados.append({
             "Item": clean_text(pegar(item, ["item", "numero", "número", "n", "id"], idx)),
             "Descrição": resumir_campo(descricao, 420),
@@ -751,16 +900,67 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
             "Unidade": unidade,
             "Valor unitário": valor_unitario,
             "Valor total": valor_total,
+            "Taxa / Percentual": taxa_percentual,
+            "Total de encargos": total_encargos,
+            "Vencimento / Prazo": vencimento,
             "Fonte": fonte,
         })
+
+    # Regra especial: se a IA devolveu uma linha "Taxa de Agenciamento" e outra "Encargos Sociais",
+    # consolidamos em uma única linha de serviço para mão de obra temporária.
+    descricoes = " ".join(str(i.get("Descrição", "")) for i in normalizados).lower()
+    tem_taxa = any(_valor_informado(i.get("Taxa / Percentual")) or "taxa" in str(i.get("Descrição", "")).lower() for i in normalizados)
+    tem_encargo = any(_valor_informado(i.get("Total de encargos")) or "encargo" in str(i.get("Descrição", "")).lower() for i in normalizados)
+    mao_obra = "mão de obra" in descricoes or "mao de obra" in descricoes or "temporári" in descricoes or "temporari" in descricoes
+
+    if mao_obra and tem_taxa and tem_encargo and len(normalizados) <= 5:
+        taxa = "Não localizado"
+        encargos = "Não localizado"
+        vencimento = "Não localizado"
+        fonte = "Contrato/anexo"
+        for item in normalizados:
+            desc_low = str(item.get("Descrição", "")).lower()
+            if not _valor_informado(taxa):
+                if _valor_informado(item.get("Taxa / Percentual")):
+                    taxa = item.get("Taxa / Percentual")
+                elif "taxa" in desc_low and _valor_informado(item.get("Valor unitário")):
+                    taxa = item.get("Valor unitário")
+            if not _valor_informado(encargos):
+                if _valor_informado(item.get("Total de encargos")):
+                    encargos = item.get("Total de encargos")
+                elif "encargo" in desc_low and _valor_informado(item.get("Valor unitário")):
+                    encargos = item.get("Valor unitário")
+            if not _valor_informado(vencimento) and _valor_informado(item.get("Vencimento / Prazo")):
+                vencimento = item.get("Vencimento / Prazo")
+            if _valor_informado(item.get("Fonte")):
+                fonte = item.get("Fonte")
+
+        return [{
+            "Item": "1",
+            "Descrição": "Mão de obra temporária",
+            "Tipo": "Serviço",
+            "Quantidade": "Não localizado",
+            "Unidade": "Não localizado",
+            "Valor unitário": "Não localizado",
+            "Valor total": "Não localizado",
+            "Taxa / Percentual": taxa,
+            "Total de encargos": encargos,
+            "Vencimento / Prazo": vencimento,
+            "Fonte": fonte,
+        }]
 
     return normalizados
 
 
 def extrair_itens_local(texto: str, limite: int = 120) -> List[Dict[str, Any]]:
     """Fallback para propostas/orçamentos com tabela."""
-    itens: List[Dict[str, Any]] = []
     texto = str(texto or "")
+
+    servico_percentual = detectar_servico_percentual(texto)
+    if servico_percentual:
+        return normalizar_itens_contrato(servico_percentual)
+
+    itens: List[Dict[str, Any]] = []
 
     def eh_numero_brasil(v: str) -> bool:
         v = str(v or "").strip()
@@ -1100,7 +1300,15 @@ Sua tarefa é consolidar CONTRATO PRINCIPAL + ANEXOS + ORÇAMENTOS enviados no m
 Retorne APENAS JSON válido, sem markdown, sem comentários e sem texto fora do JSON.
 
 OBJETIVO PRINCIPAL
-Extrair os dados comerciais e jurídicos reais do contrato, priorizando o documento principal e usando anexos/orçamentos apenas quando o contrato fizer referência a eles.
+Extrair os dados comerciais e jurídicos reais do contrato, priorizando o documento final assinado quando houver, e usando anexos/orçamentos/propostas/e-mails/certificados para completar valores, itens, assinaturas e divergências.
+
+REGRA DE HIERARQUIA DOCUMENTAL
+1. Se existir documento final assinado ou certificado DocuSign concluído/completed, ele prevalece sobre minutas, versões antigas e comentários.
+2. Minutas Word, aditivos em revisão e comentários servem para identificar histórico e pendências, mas NÃO devem transformar um contrato assinado em pendente.
+3. Se houver certificado de conclusão DocuSign com status Completed ou assinaturas eletrônicas, contrato_assinado deve ser "Sim".
+4. Data da assinatura deve considerar a data do contrato assinado ou a conclusão/assinatura no DocuSign, não a data de minuta, proposta ou e-mail.
+5. Para contratos com proposta comercial anexa, valores unitários, quantidades e totais devem ser extraídos prioritariamente da proposta/orçamento/anexo de valores.
+6. Se houver e-mail discutindo divergência comercial, trate como evidência de atenção/pendência apenas se a versão final assinada não tiver resolvido o ponto.
 
 CAMPOS OBRIGATÓRIOS
 Retorne exatamente estas chaves principais e internas:
@@ -1127,7 +1335,7 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Valor do Contrato Original = valor_contrato_original
 
 TABELA DE ITENS OBRIGATÓRIA
-Também retorne a chave itens_contrato como lista. Cada item deve conter exatamente:
+Também retorne a chave itens_contrato como lista. Cada item deve conter, quando aplicável:
 - item
 - descricao
 - tipo
@@ -1135,7 +1343,18 @@ Também retorne a chave itens_contrato como lista. Cada item deve conter exatame
 - unidade
 - valor_unitario
 - valor_total
+- taxa_percentual
+- total_encargos
+- vencimento
 - fonte
+
+Para propostas de mão de obra temporária ou serviço sem preço unitário em R$:
+- NÃO crie uma linha separada para "taxa de agenciamento" e outra para "encargos sociais".
+- Crie UMA linha principal com descricao = "Mão de obra temporária" ou o serviço equivalente.
+- Preencha taxa_percentual com a taxa de agenciamento, exemplo "7%".
+- Preencha total_encargos com o percentual/total de encargos, exemplo "59,08%".
+- Preencha vencimento com o prazo de pagamento, exemplo "30 dias após emissão da nota fiscal".
+- Deixe valor_unitario e valor_total como "Não localizado" quando não houver valor em R$.
 
 REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 1. Não invente dados. Se não encontrar, retorne "Não localizado".
@@ -1175,12 +1394,14 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 31. valor_contrato_original deve estar formatado em reais, exemplo: "R$ 43.468,16".
 32. itens_contrato deve trazer todos os materiais e serviços unitários encontrados no contrato, anexos, propostas ou orçamentos.
 33. descricao deve ser o nome do material/serviço, sem copiar cláusulas longas.
-34. valor_unitario deve ser o preço unitário do item. Se não houver preço unitário claro, retorne "Não localizado".
-35. valor_total deve ser o total da linha/item. Se só houver valor unitário, repita o valor em valor_unitario e deixe valor_total como "Não localizado", exceto se quantidade permitir cálculo.
-36. quantidade e unidade devem ser extraídas quando existirem, exemplo: "10" e "UN".
+34. valor_unitario deve ser o preço unitário do item. Se não houver preço unitário monetário claro, retorne "Não aplicável" ou "Não localizado".
+35. valor_total deve ser o total da linha/item. Se não houver valor monetário, retorne "Não localizado".
+36. quantidade e unidade devem ser extraídas quando existirem; em serviços percentuais sem quantidade, retorne "Não aplicável".
 37. tipo deve ser "Material" ou "Serviço".
 38. fonte deve indicar de onde veio o item, exemplo: "Contrato", "Anexo", "Proposta" ou "Orçamento".
-39. Se não houver tabela de itens, retorne itens_contrato como lista vazia [].
+39. Para mão de obra temporária/RH, crie 1 item com descricao "Mão de Obra Temporária" e preencha taxa_percentual, total_encargos e vencimento. Não crie itens separados chamados "Taxa" ou "Encargos".
+40. Se não houver tabela de itens nem condição comercial de serviço, retorne itens_contrato como lista vazia [].
+40. Para contratos de mão de obra temporária, taxa de agenciamento, folha de pagamento, encargos sociais ou MCT/Mão de Obra: consolide as condições em um único serviço principal. Não trate taxa e encargos como materiais separados.
 
 PADRÃO ESPERADO PARA ESTE TIPO DE CONTRATO
 Se o texto indicar contrato de prestação de serviços de substituição/fornecimento de baterias de nobreaks:
@@ -1213,50 +1434,170 @@ MODELOS_GEMINI = {
 }
 
 
-def analisar_gemini(texto: str, api_key: str, opcao_modelo: str) -> Dict[str, Any]:
+
+def _mime_type_arquivo(nome_arquivo: str) -> str:
+    """MIME type usado no upload dos arquivos originais para o Gemini."""
+    nome = str(nome_arquivo or "").lower()
+    if nome.endswith(".pdf"):
+        return "application/pdf"
+    if nome.endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if nome.endswith(".doc"):
+        return "application/msword"
+    return "application/octet-stream"
+
+
+def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -> str:
+    """Prompt reforçado para quando os arquivos originais são enviados ao Gemini."""
+    lista = "\n".join(f"- {nome}" for nome in nomes_arquivos) or "- Não informado"
+
+    return f"""
+ATENÇÃO: nesta análise você recebeu os ARQUIVOS ORIGINAIS anexados, além do texto extraído como apoio técnico.
+
+COMO ANALISAR OS DOCUMENTOS
+1. Use os arquivos originais como fonte principal.
+2. Navegue visualmente pelos documentos, páginas, anexos, propostas comerciais, tabelas de valores, quadros de composição, certificados DocuSign e e-mails.
+3. Entenda a relação entre contrato principal, termo aditivo, proposta comercial, proposta técnica, orçamento, anexos, e-mails e certificado de assinatura.
+4. Quando houver divergência entre texto extraído e arquivo original, priorize o arquivo original.
+5. Quando houver documento assinado ou certificado DocuSign concluído, ele prevalece sobre minutas e versões antigas.
+6. Não marque contrato como pendente de assinatura se existir versão assinada ou certificado DocuSign completed no pacote.
+7. Se a proposta/anexo contiver tabela visual com valores, extraia os itens da tabela mesmo que o texto OCR esteja ruim.
+8. Faça uma análise contextual, como se estivesse revisando o pacote documental completo.
+9. Mesmo fazendo análise contextual, retorne APENAS JSON válido para o sistema.
+
+REGRAS ESPECIAIS PARA REFEIÇÕES / ALIMENTAÇÃO / REFEITÓRIO
+- Se houver tabela de valores com refeições, extraia cada linha comercial como item_contrato.
+- Para o caso de refeição transportada, itens esperados podem ser: Desjejum, Almoço, Café da tarde, Jantar, Ceia, quando existirem na tabela de valores.
+- Capture quantidade estimada/mês, valor unitário e valor total da linha.
+- Não transforme composição nutricional/cardápio (pão, arroz, feijão, salada, proteína etc.) em item financeiro, salvo se houver preço unitário da composição.
+- Equipamentos, utensílios, louças, talheres, descartáveis e máquina de suco devem aparecer como escopo/itens inclusos se não houver preço unitário próprio; não invente valor unitário.
+- Se houver quadro dizendo "Confirmamos a inexistência de volume mínimo faturável ou taxas adicionais", não classifique como pendência de volume mínimo, a menos que outro documento final assinado contradiga isso.
+
+ARQUIVOS ORIGINAIS RECEBIDOS:
+{lista}
+
+""" + prompt_ia(texto)
+
+
+def _subir_arquivos_originais_gemini(genai, arquivos_originais: Any) -> tuple[list, list]:
+    """Salva temporariamente e envia os arquivos originais para o Gemini Files API."""
+    uploaded_files = []
+    temp_paths = []
+
+    if not arquivos_originais:
+        return uploaded_files, temp_paths
+
+    for arquivo in arquivos_originais:
+        try:
+            nome = getattr(arquivo, "name", "documento")
+            arquivo.seek(0)
+            conteudo = arquivo.read()
+            suffix = Path(nome).suffix or ".bin"
+
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            tmp.write(conteudo)
+            tmp.flush()
+            tmp.close()
+            temp_paths.append(tmp.name)
+
+            uploaded = genai.upload_file(
+                path=tmp.name,
+                mime_type=_mime_type_arquivo(nome),
+                display_name=nome,
+            )
+
+            # Alguns arquivos podem ficar em processamento por poucos segundos.
+            for _ in range(45):
+                state = getattr(getattr(uploaded, "state", None), "name", "")
+                if state and state.upper() == "PROCESSING":
+                    time.sleep(1)
+                    uploaded = genai.get_file(uploaded.name)
+                else:
+                    break
+
+            uploaded_files.append(uploaded)
+
+        except Exception as erro:
+            st.warning(
+                f"Não consegui enviar o arquivo original para a IA: {getattr(arquivo, 'name', 'arquivo')}. "
+                f"Usarei o texto extraído como apoio. Detalhe: {erro}"
+            )
+
+    return uploaded_files, temp_paths
+
+
+def _limpar_uploads_gemini(genai, uploaded_files: list, temp_paths: list) -> None:
+    """Remove temporários locais e tenta remover arquivos da área temporária da API."""
+    for uploaded in uploaded_files or []:
+        try:
+            if getattr(uploaded, "name", None):
+                genai.delete_file(uploaded.name)
+        except Exception:
+            pass
+
+    for caminho in temp_paths or []:
+        try:
+            os.remove(caminho)
+        except Exception:
+            pass
+
+
+def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
     import google.generativeai as genai
 
     genai.configure(api_key=api_key)
 
     modelos = MODELOS_GEMINI.get(opcao_modelo, MODELOS_GEMINI["Automático recomendado"])
+    uploaded_files, temp_paths = _subir_arquivos_originais_gemini(genai, arquivos_originais)
+    nomes_arquivos = [getattr(a, "name", "documento") for a in (arquivos_originais or [])]
+    prompt_final = _prompt_ia_com_documentos_originais(texto, nomes_arquivos) if uploaded_files else prompt_ia(texto)
 
     ultimo_erro = None
 
-    for nome in modelos:
-        try:
-            model = genai.GenerativeModel(nome)
+    try:
+        for nome in modelos:
+            try:
+                model = genai.GenerativeModel(nome)
+                conteudo = [prompt_final] + uploaded_files if uploaded_files else prompt_final
 
-            resp = model.generate_content(
-                prompt_ia(texto),
-                generation_config={
-                    "temperature": 0.0,
-                    "top_p": 0.2,
-                    "response_mime_type": "application/json",
-                },
-            )
+                resp = model.generate_content(
+                    conteudo,
+                    generation_config={
+                        "temperature": 0.0,
+                        "top_p": 0.2,
+                        "response_mime_type": "application/json",
+                    },
+                )
 
-            content = (
-                resp.text
-                .strip()
-                .replace("```json", "")
-                .replace("```", "")
-                .strip()
-            )
+                content = (
+                    resp.text
+                    .strip()
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
 
-            st.success(f"IA utilizada: {nome}")
-            resultado_json = json.loads(content)
-            if isinstance(resultado_json, dict):
-                resultado_json["modelo_ia"] = nome
-            return resultado_json
+                if uploaded_files:
+                    st.success(f"IA utilizada: {nome} • documentos originais analisados")
+                else:
+                    st.success(f"IA utilizada: {nome} • texto extraído analisado")
 
-        except Exception as e:
-            ultimo_erro = e
-            if opcao_modelo != "Automático recomendado":
-                raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
-            continue
+                resultado_json = json.loads(content)
+                if isinstance(resultado_json, dict):
+                    resultado_json["modelo_ia"] = nome
+                    resultado_json["modo_analise_ia"] = "Documentos originais + texto extraído" if uploaded_files else "Texto extraído"
+                return resultado_json
 
-    raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
+            except Exception as e:
+                ultimo_erro = e
+                if opcao_modelo != "Automático recomendado":
+                    raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
+                continue
 
+        raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
+
+    finally:
+        _limpar_uploads_gemini(genai, uploaded_files, temp_paths)
 
 def formatar_cnpj(valor: Any) -> str:
     txt = clean_text(valor)
@@ -1353,9 +1694,17 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(base.get("pendencias"), list):
         base["pendencias"] = []
 
-    base["itens_contrato"] = normalizar_itens_contrato(base.get("itens_contrato", []))
-    if not base["itens_contrato"]:
-        texto_fallback = resultado.get("texto_extraido") if isinstance(resultado, dict) else ""
+    texto_fallback = resultado.get("texto_extraido") if isinstance(resultado, dict) else ""
+    itens_ia = normalizar_itens_contrato(base.get("itens_contrato", []))
+    itens_servico_percentual = detectar_servico_percentual(str(texto_fallback or ""))
+
+    # Para contratos de mão de obra temporária/RH, taxa e encargos são atributos
+    # do serviço principal, não itens separados.
+    if itens_servico_percentual and (not itens_ia or _itens_sao_apenas_atributos_comerciais(itens_ia)):
+        base["itens_contrato"] = normalizar_itens_contrato(itens_servico_percentual)
+    elif itens_ia:
+        base["itens_contrato"] = itens_ia
+    else:
         base["itens_contrato"] = extrair_itens_local(str(texto_fallback or ""))
 
     for lista in ["checklist", "pendencias"]:
@@ -2133,10 +2482,25 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
     itens = normalizar_itens_contrato(resultado.get("itens_contrato", []))
     st.markdown(f'<div class="section-title">{safe(titulo)}</div>', unsafe_allow_html=True)
     if not itens:
-        st.info("Nenhum material ou serviço unitário foi identificado com valor unitário no contrato/anexos.")
+        st.info("Nenhum material, serviço ou condição comercial unitária foi identificado no contrato/anexos.")
         return
 
     df_itens = pd.DataFrame(itens)
+
+    # Mostra colunas complementares somente quando houver informação real.
+    colunas_base = ["Item", "Descrição", "Tipo", "Quantidade", "Unidade", "Valor unitário", "Valor total"]
+    colunas_opcionais = ["Taxa / Percentual", "Total de encargos", "Vencimento / Prazo"]
+    colunas_finais = [c for c in colunas_base if c in df_itens.columns]
+
+    for col in colunas_opcionais:
+        if col in df_itens.columns and df_itens[col].apply(_valor_informado).any():
+            colunas_finais.append(col)
+
+    if "Fonte" in df_itens.columns:
+        colunas_finais.append("Fonte")
+
+    df_itens = df_itens[colunas_finais]
+
     st.dataframe(
         df_itens,
         use_container_width=True,
@@ -2145,6 +2509,10 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
             "Descrição": st.column_config.TextColumn("Descrição", width="large"),
             "Valor unitário": st.column_config.TextColumn("Valor unitário"),
             "Valor total": st.column_config.TextColumn("Valor total"),
+            "Taxa / Percentual": st.column_config.TextColumn("Taxa / Percentual"),
+            "Total de encargos": st.column_config.TextColumn("Total de encargos"),
+            "Vencimento / Prazo": st.column_config.TextColumn("Vencimento / Prazo", width="medium"),
+            "Fonte": st.column_config.TextColumn("Fonte", width="medium"),
         },
     )
 
@@ -2504,7 +2872,7 @@ if pagina == "🤖 Assistente IA":
     st.markdown("""
     <style>
 
-    .nexus-ai-box{
+    .auditor-ai-box{
         background:linear-gradient(145deg,#101821,#0b1118);
         border-radius:18px;
         padding:25px;
@@ -2662,7 +3030,7 @@ if pagina == "🤖 Assistente IA":
 
         if df.empty:
             return """
-        <div class="nexus-ai-box">
+        <div class="auditor-ai-box">
             <h3>📊 Resumo Executivo</h3>
             <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
         """
@@ -2686,7 +3054,7 @@ if pagina == "🤖 Assistente IA":
         baixo = (riscos=="BAIXO").sum()
 
         return f"""
-        <div class="nexus-ai-box">
+        <div class="auditor-ai-box">
 
             <h3>📊 Resumo Executivo</h3>
 
@@ -2945,10 +3313,23 @@ if pagina == "📄 Nova Análise":
     origem_contrato = st.radio("Origem do contrato", ["📘 Projuris", "🛒 Ariba"], horizontal=True, label_visibility="collapsed")
 
     st.markdown('<div class="section-title">Upload do contrato</div>', unsafe_allow_html=True)
+
+    # Controle para limpar todos os anexos de uma vez.
+    # No Streamlit, o file_uploader só é realmente limpo quando a key muda.
+    if "upload_contrato_key" not in st.session_state:
+        st.session_state["upload_contrato_key"] = 0
+
+    up_col1, up_col2 = st.columns([4, 1])
+    with up_col2:
+        if st.button("🧹 Limpar anexos", use_container_width=True):
+            st.session_state["upload_contrato_key"] += 1
+            st.rerun()
+
     arquivos = st.file_uploader(
         "Envie o contrato principal e anexos",
         type=["pdf", "docx"],
         accept_multiple_files=True,
+        key=f"upload_contrato_{st.session_state['upload_contrato_key']}",
     )
 
     if not arquivos:
@@ -3003,6 +3384,7 @@ if pagina == "📄 Nova Análise":
                             texto=texto,
                             api_key=gemini_key,
                             opcao_modelo=modo,
+                            arquivos_originais=arquivos,
                         )
                     else:
                         resultado = local_extract(texto)
@@ -3013,8 +3395,11 @@ if pagina == "📄 Nova Análise":
                 resultado["texto_extraido"] = texto
                 resultado = normalizar(resultado)
 
-                # Reforço final: se a IA não devolver itens, tenta extrair do texto/tabelas.
-                if not resultado.get("itens_contrato"):
+                # Reforço final: para serviços percentuais, consolida taxa/encargos no serviço principal.
+                itens_percentuais = detectar_servico_percentual(texto)
+                if itens_percentuais and (not resultado.get("itens_contrato") or _itens_sao_apenas_atributos_comerciais(resultado.get("itens_contrato", []))):
+                    resultado["itens_contrato"] = normalizar_itens_contrato(itens_percentuais)
+                elif not resultado.get("itens_contrato"):
                     resultado["itens_contrato"] = extrair_itens_local(texto)
 
                 resultado["data_analise"] = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -3090,7 +3475,7 @@ if pagina == "📄 Nova Análise":
             st.download_button(
                 "📥 Baixar relatório Excel",
                 data=excel,
-                file_name=f"relatorio_nexus_contract_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                file_name=f"relatorio_auditor_contract_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
@@ -3285,7 +3670,7 @@ if pagina == "📚 Histórico":
         st.download_button(
             "📥 Baixar histórico filtrado",
             data=excel_hist,
-            file_name=f"historico_nexus_contract_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            file_name=f"historico_auditor_contract_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
