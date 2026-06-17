@@ -560,11 +560,16 @@ def safe(value: Any) -> str:
 
 
 def clean_text(value: Any) -> str:
-    """Remove tags HTML e entidades comuns."""
+    """Remove tags HTML e entidades comuns e SEMPRE devolve texto.
+
+    A IA pode devolver números em campos financeiros/itens (ex.: 6720 em
+    vez de "R$ 6.720,00"). Se deixarmos int/float passar adiante, funções
+    com regex quebram com TypeError.
+    """
     if value is None:
         return "Não localizado"
     if not isinstance(value, str):
-        return value
+        value = str(value)
     value = re.sub(r"<[^>]+>", "", value)
     value = html.unescape(value)
     value = re.sub(r"\s+", " ", value).strip()
@@ -1888,7 +1893,7 @@ def _extrair_assinantes_docusign(texto: str) -> list[str]:
 
 
 def _parse_moeda_brasil(valor: Any) -> float | None:
-    txt = clean_text(valor)
+    txt = str(clean_text(valor))
     if not _valor_informado(txt):
         return None
     m = re.search(r"(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|[0-9]+(?:,[0-9]{2})?)", txt)
