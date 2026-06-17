@@ -11,8 +11,6 @@ import re
 import json
 import html
 import base64
-import tempfile
-import time
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -961,164 +959,50 @@ MODELOS_GEMINI = {
 }
 
 
-
-def _mime_type_arquivo(nome_arquivo: str) -> str:
-    """MIME type usado no upload dos arquivos originais para o Gemini."""
-    nome = str(nome_arquivo or "").lower()
-    if nome.endswith(".pdf"):
-        return "application/pdf"
-    if nome.endswith(".docx"):
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if nome.endswith(".doc"):
-        return "application/msword"
-    return "application/octet-stream"
-
-
-def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -> str:
-    """Prompt reforçado para quando os arquivos originais são enviados ao Gemini."""
-    lista = "\n".join(f"- {nome}" for nome in nomes_arquivos) or "- Não informado"
-
-    return f"""
-ATENÇÃO: nesta análise você recebeu os ARQUIVOS ORIGINAIS anexados, além do texto extraído como apoio técnico.
-
-COMO ANALISAR
-1. Use os arquivos originais como fonte principal.
-2. Navegue visualmente pelos documentos, páginas, anexos, tabelas, propostas comerciais e certificados de assinatura.
-3. Entenda a relação entre contrato principal, termo aditivo, proposta comercial, orçamento, anexos e certificados.
-4. Quando houver divergência entre o texto extraído e o arquivo original, priorize o arquivo original.
-5. Use o texto extraído apenas como apoio para localização de trechos.
-6. Faça uma análise contextual, como se estivesse revisando o pacote documental completo.
-7. Mesmo fazendo análise contextual, retorne APENAS JSON válido para o sistema.
-
-ARQUIVOS ORIGINAIS RECEBIDOS:
-{lista}
-
-""" + prompt_ia(texto)
-
-
-def _subir_arquivos_originais_gemini(genai, arquivos_originais: Any) -> tuple[list, list]:
-    """Salva temporariamente e envia os arquivos originais para o Gemini Files API."""
-    uploaded_files = []
-    temp_paths = []
-
-    if not arquivos_originais:
-        return uploaded_files, temp_paths
-
-    for arquivo in arquivos_originais:
-        try:
-            nome = getattr(arquivo, "name", "documento")
-            arquivo.seek(0)
-            conteudo = arquivo.read()
-            suffix = Path(nome).suffix or ".bin"
-
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            tmp.write(conteudo)
-            tmp.flush()
-            tmp.close()
-
-            temp_paths.append(tmp.name)
-
-            uploaded = genai.upload_file(
-                path=tmp.name,
-                mime_type=_mime_type_arquivo(nome),
-                display_name=nome,
-            )
-
-            # Alguns arquivos podem ficar em processamento por poucos segundos.
-            for _ in range(30):
-                state = getattr(getattr(uploaded, "state", None), "name", "")
-                if state and state.upper() == "PROCESSING":
-                    time.sleep(1)
-                    try:
-                        uploaded = genai.get_file(uploaded.name)
-                    except Exception:
-                        break
-                else:
-                    break
-
-            uploaded_files.append(uploaded)
-
-        except Exception as erro:
-            # Não derruba a análise: o texto extraído continuará indo como fallback.
-            st.warning(f"Não consegui enviar o arquivo original para a IA: {getattr(arquivo, 'name', 'arquivo')}. Usarei o texto extraído como apoio. Detalhe: {erro}")
-
-    return uploaded_files, temp_paths
-
-
-def _limpar_uploads_gemini(genai, uploaded_files: list, temp_paths: list) -> None:
-    """Remove temporários locais e tenta remover arquivos da área temporária da API."""
-    for uploaded in uploaded_files or []:
-        try:
-            if getattr(uploaded, "name", None):
-                genai.delete_file(uploaded.name)
-        except Exception:
-            pass
-
-    for caminho in temp_paths or []:
-        try:
-            os.remove(caminho)
-        except Exception:
-            pass
-
-
-def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
+def analisar_gemini(texto: str, api_key: str, opcao_modelo: str) -> Dict[str, Any]:
     import google.generativeai as genai
 
     genai.configure(api_key=api_key)
 
     modelos = MODELOS_GEMINI.get(opcao_modelo, MODELOS_GEMINI["Automático recomendado"])
 
-    uploaded_files, temp_paths = _subir_arquivos_originais_gemini(genai, arquivos_originais)
-    nomes_arquivos = [getattr(a, "name", "documento") for a in (arquivos_originais or [])]
-    prompt_final = _prompt_ia_com_documentos_originais(texto, nomes_arquivos) if uploaded_files else prompt_ia(texto)
-
     ultimo_erro = None
 
-    try:
-        for nome in modelos:
-            try:
-                model = genai.GenerativeModel(nome)
+    for nome in modelos:
+        try:
+            model = genai.GenerativeModel(nome)
 
-                conteudo = [prompt_final] + uploaded_files if uploaded_files else prompt_final
+            resp = model.generate_content(
+                prompt_ia(texto),
+                generation_config={
+                    "temperature": 0.0,
+                    "top_p": 0.2,
+                    "response_mime_type": "application/json",
+                },
+            )
 
-                resp = model.generate_content(
-                    conteudo,
-                    generation_config={
-                        "temperature": 0.0,
-                        "top_p": 0.2,
-                        "response_mime_type": "application/json",
-                    },
-                )
+            content = (
+                resp.text
+                .strip()
+                .replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
 
-                content = (
-                    resp.text
-                    .strip()
-                    .replace("```json", "")
-                    .replace("```", "")
-                    .strip()
-                )
+            st.success(f"IA utilizada: {nome}")
+            resultado_json = json.loads(content)
+            if isinstance(resultado_json, dict):
+                resultado_json["modelo_ia"] = nome
+            return resultado_json
 
-                if uploaded_files:
-                    st.success(f"IA utilizada: {nome} • documentos originais analisados")
-                else:
-                    st.success(f"IA utilizada: {nome} • texto extraído analisado")
+        except Exception as e:
+            ultimo_erro = e
+            if opcao_modelo != "Automático recomendado":
+                raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
+            continue
 
-                resultado_json = json.loads(content)
-                if isinstance(resultado_json, dict):
-                    resultado_json["modelo_ia"] = nome
-                    resultado_json["modo_analise_ia"] = "Documentos originais + texto extraído" if uploaded_files else "Texto extraído"
-                return resultado_json
+    raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
 
-            except Exception as e:
-                ultimo_erro = e
-                if opcao_modelo != "Automático recomendado":
-                    raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
-                continue
-
-        raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
-
-    finally:
-        _limpar_uploads_gemini(genai, uploaded_files, temp_paths)
 
 def formatar_cnpj(valor: Any) -> str:
     txt = clean_text(valor)
@@ -2459,7 +2343,6 @@ if pagina == "📄 Nova Análise":
                             texto=texto,
                             api_key=gemini_key,
                             opcao_modelo=modo,
-                            arquivos_originais=arquivos,
                         )
                     else:
                         resultado = local_extract(texto)
