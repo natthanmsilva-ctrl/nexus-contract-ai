@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List
-from textwrap import dedent
 
 import pandas as pd
 import sqlite3
@@ -69,12 +68,7 @@ CAMPOS_OFICIAIS = [
     ("Anticorrupção", "anticorrupcao"),
     ("Proteção de Dados LGPD", "protecao_dados_lgpd"),
     ("Data da Assinatura", "data_assinatura"),
-    ("Data do Contrato", "data_contrato"),
-    ("Data Conclusão DocuSign", "data_conclusao_docusign"),
     ("Valor do Contrato Original", "valor_contrato_original"),
-    ("Valor Mensal Estimado", "valor_mensal_estimado"),
-    ("Valor Total Estimado da Vigência", "valor_total_estimado_vigencia"),
-    ("Pessoas que assinaram", "pessoas_que_assinaram"),
 ]
 
 CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
@@ -544,59 +538,6 @@ button[kind="secondary"]:hover{
     .info-grid,.flow-grid,.contract-grid{grid-template-columns:1fr;}
     .contract-top,.card-footer{flex-direction:column;align-items:flex-start;}
 }
-
-/* Filtros do histórico mais limpos */
-div[data-testid="stExpander"]{
-    border:1px solid rgba(215,191,117,.22) !important;
-    border-radius:18px !important;
-    background:rgba(16,24,34,.42) !important;
-}
-
-div[data-testid="stExpander"] summary{
-    font-weight:900 !important;
-    color:#f3e6b3 !important;
-}
-
-.filter-note{
-    background:linear-gradient(135deg,rgba(0,60,47,.80),rgba(16,24,34,.88));
-    border:1px solid rgba(215,191,117,.28);
-    border-radius:16px;
-    padding:13px 16px;
-    color:#e5e7eb;
-    margin:14px 0 20px;
-    font-weight:700;
-}
-
-/* Histórico: deixa filtros mais alinhados e elegantes */
-div[data-testid="stVerticalBlockBorderWrapper"] input,
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-baseweb="select"]{
-    min-height:42px;
-}
-
-div[data-testid="stVerticalBlockBorderWrapper"] label{
-    min-height:22px;
-}
-
-/* Assistente IA: evita aparência de bloco de código e melhora os cards */
-[data-testid="stChatMessage"] .auditor-ai-box{
-    width:100%;
-    box-sizing:border-box;
-}
-
-@media (max-width: 1100px){
-    .ai-summary-grid,
-    .ai-contract-grid{
-        grid-template-columns:repeat(2, minmax(0,1fr)) !important;
-    }
-}
-
-@media (max-width: 700px){
-    .ai-summary-grid,
-    .ai-contract-grid{
-        grid-template-columns:1fr !important;
-    }
-}
-
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -614,16 +555,11 @@ def safe(value: Any) -> str:
 
 
 def clean_text(value: Any) -> str:
-    """Remove tags HTML e entidades comuns e SEMPRE devolve texto.
-
-    A IA pode devolver números em campos financeiros/itens (ex.: 6720 em
-    vez de "R$ 6.720,00"). Se deixarmos int/float passar adiante, funções
-    com regex quebram com TypeError.
-    """
+    """Remove tags HTML e entidades comuns."""
     if value is None:
         return "Não localizado"
     if not isinstance(value, str):
-        value = str(value)
+        return value
     value = re.sub(r"<[^>]+>", "", value)
     value = html.unescape(value)
     value = re.sub(r"\s+", " ", value).strip()
@@ -1364,17 +1300,15 @@ Sua tarefa é consolidar CONTRATO PRINCIPAL + ANEXOS + ORÇAMENTOS enviados no m
 Retorne APENAS JSON válido, sem markdown, sem comentários e sem texto fora do JSON.
 
 OBJETIVO PRINCIPAL
-Extrair os dados comerciais e jurídicos reais do contrato, priorizando o documento principal e usando anexos/orçamentos apenas quando o contrato fizer referência a eles.
+Extrair os dados comerciais e jurídicos reais do contrato, priorizando o documento final assinado quando houver, e usando anexos/orçamentos/propostas/e-mails/certificados para completar valores, itens, assinaturas e divergências.
 
-ORDEM DE PRIORIDADE DOS DOCUMENTOS
-Quando os arquivos enviados tiverem minutas, versões antigas e versão assinada, siga esta ordem:
-1. PDF assinado com DocuSign / Certificate of Completion com Status Completed.
-2. Contrato final em PDF.
-3. Proposta comercial.
-4. Proposta técnica.
-5. E-mails de negociação apenas como contexto comercial.
-6. Minutas DOCX antigas somente quando não houver contrato final assinado.
-Se houver conflito entre minuta antiga e PDF assinado, prevalece o PDF assinado.
+REGRA DE HIERARQUIA DOCUMENTAL
+1. Se existir documento final assinado ou certificado DocuSign concluído/completed, ele prevalece sobre minutas, versões antigas e comentários.
+2. Minutas Word, aditivos em revisão e comentários servem para identificar histórico e pendências, mas NÃO devem transformar um contrato assinado em pendente.
+3. Se houver certificado de conclusão DocuSign com status Completed ou assinaturas eletrônicas, contrato_assinado deve ser "Sim".
+4. Data da assinatura deve considerar a data do contrato assinado ou a conclusão/assinatura no DocuSign, não a data de minuta, proposta ou e-mail.
+5. Para contratos com proposta comercial anexa, valores unitários, quantidades e totais devem ser extraídos prioritariamente da proposta/orçamento/anexo de valores.
+6. Se houver e-mail discutindo divergência comercial, trate como evidência de atenção/pendência apenas se a versão final assinada não tiver resolvido o ponto.
 
 CAMPOS OBRIGATÓRIOS
 Retorne exatamente estas chaves principais e internas:
@@ -1398,12 +1332,7 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Anticorrupção = anticorrupcao
 - Proteção de Dados LGPD = protecao_dados_lgpd
 - Data da Assinatura = data_assinatura
-- Data do Contrato = data_contrato
-- Data Conclusão DocuSign = data_conclusao_docusign
 - Valor do Contrato Original = valor_contrato_original
-- Valor Mensal Estimado = valor_mensal_estimado
-- Valor Total Estimado da Vigência = valor_total_estimado_vigencia
-- Pessoas que assinaram = pessoas_que_assinaram
 
 TABELA DE ITENS OBRIGATÓRIA
 Também retorne a chave itens_contrato como lista. Cada item deve conter, quando aplicável:
@@ -1437,22 +1366,16 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 7. descricao_breve_cadastro deve ser curta e própria para cadastro de material/serviço. Exemplo: "Fornecimento e instalação de baterias para nobreaks".
 8. condicao_pagamento_dias deve retornar em formato claro, exemplo: "90 dias". Não retorne apenas número solto.
 9. forma_pagamento deve informar a forma descrita no contrato, exemplo: "Mediante emissão de nota fiscal".
-10. valor_contrato_original deve ser o valor comercial base do contrato/proposta. Em contratos recorrentes, mensais ou por consumo estimado, NÃO multiplique pela vigência; use o valor mensal/recorrente como valor_contrato_original.
-11. valor_mensal_estimado deve ser preenchido quando houver tabela mensal, consumo mensal, quantidade mensal ou "valor mensal estimado". Exemplo: R$ 39.200,00 mensais estimados.
-12. valor_total_estimado_vigencia deve ser preenchido somente quando houver cálculo de valor mensal x prazo. Se for cálculo seu, escreva como estimado, exemplo: R$ 1.411.200,00 (estimado para 36 meses).
-13. Se houver mais de um valor monetário, priorize nesta ordem:
-    a) valor mensal/recorrente ou comercial base apresentado na proposta;
-    b) valor total explícito do contrato, se o contrato realmente trouxer total fechado;
-    c) soma dos itens da proposta mensal;
-    d) cálculo estimado da vigência apenas no campo valor_total_estimado_vigencia.
-14. vigencia_apos_assinatura deve manter a redação objetiva do contrato, exemplo: "36 meses a partir da assinatura" ou "Prazo indeterminado".
-15. data_contrato deve ser a data textual do instrumento, exemplo "São Paulo, 21 de maio de 2026".
-16. data_conclusao_docusign deve ser a data do Certificate of Completion / Completed do DocuSign.
-17. data_assinatura deve ser a data final efetiva da assinatura quando houver DocuSign Completed; se não houver certificado, use a data textual do contrato.
-18. contrato_assinado deve retornar "Sim" se houver DocuSign Certificate of Completion com Status Completed, assinaturas eletrônicas concluídas, ou evidência de assinatura das partes/testemunhas.
-19. pessoas_que_assinaram deve listar os nomes encontrados no certificado DocuSign ou nas assinaturas do contrato. Retorne nomes separados por ponto e vírgula.
-20. Se houver PDF assinado/DocuSign Completed, ignore pendências de assinatura existentes em minutas DOCX antigas.
-21. Se não encontrar assinatura, alerta_assinatura deve retornar "Contrato sem evidência de assinatura localizada".
+10. valor_contrato_original deve ser o VALOR TOTAL DO CONTRATO/ORÇAMENTO REFERENCIADO, não valor unitário, não parcela e não subtotal parcial. Se houver quantitativo x valor unitário, calcule o total. Se existir orçamento anexo prevalecente citado pelo contrato, use o total do orçamento.
+11. Se houver mais de um valor monetário, priorize nesta ordem:
+    a) valor total do contrato;
+    b) valor total do orçamento/proposta anexa citada no contrato;
+    c) soma/calculo por quantidade x valor unitário;
+    d) maior valor total claramente vinculado ao objeto.
+12. vigencia_apos_assinatura deve manter a redação objetiva do contrato, exemplo: "Prazo indeterminado".
+13. data_assinatura deve ser a data da assinatura do contrato, não data de orçamento, não data de proposta, não data de alteração cadastral.
+14. contrato_assinado deve retornar "Sim" ou "Não".
+15. Se não encontrar assinatura, alerta_assinatura deve retornar "Contrato sem evidência de assinatura localizada".
 16. anticorrupcao e protecao_dados_lgpd devem resumir a cláusula específica quando houver, explicando a obrigação principal.
 17. risco deve ser BAIXO, MÉDIO ou ALTO.
 18. score deve ser número inteiro de 0 a 100, onde maior é melhor.
@@ -1496,12 +1419,6 @@ EXEMPLOS DE NÍVEL DE DETALHE ESPERADO
 - anticorrupcao: "Há cláusula de anticorrupção exigindo conduta ética e conformidade com a Lei 12.846/13."
 - protecao_dados_lgpd: "Há cláusula de proteção de dados pessoais, com obrigações de segurança, confidencialidade e conformidade com a LGPD."
 
-VALIDAÇÃO FINAL OBRIGATÓRIA ANTES DE RESPONDER
-- Se identificar tabela de valores mensal e vigência em meses, separe valor mensal de valor total estimado da vigência.
-- Se identificar Certificate of Completion / Status Completed do DocuSign, contrato_assinado = "Sim", status não deve ser "Pendente de assinatura" e pessoas_que_assinaram deve listar os signatários.
-- Se identificar PDF assinado e minutas DOCX sem assinatura, prevalece o PDF assinado.
-- Para contratos de alimentação/refeição, itens como Desjejum, Almoço e Café da Tarde devem aparecer em itens_contrato com quantidade, unidade, valor unitário e valor total.
-
 CONTRATO E ANEXOS EXTRAÍDOS:
 {texto[:120000]}
 """
@@ -1519,76 +1436,42 @@ MODELOS_GEMINI = {
 
 
 def _mime_type_arquivo(nome_arquivo: str) -> str:
-    """MIME type usado no upload dos arquivos para o Gemini Files API.
-
-    Observação importante: a Files API não aceita DOCX diretamente em alguns
-    ambientes/chaves corporativas. Por isso Word é convertido para TXT antes
-    do upload e deve ir como text/plain.
-    """
+    """MIME type usado no upload dos arquivos originais para o Gemini."""
     nome = str(nome_arquivo or "").lower()
     if nome.endswith(".pdf"):
         return "application/pdf"
-    if nome.endswith((".txt", ".md")):
-        return "text/plain"
+    if nome.endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if nome.endswith(".doc"):
+        return "application/msword"
     return "application/octet-stream"
 
 
-def _arquivo_word(nome_arquivo: str) -> bool:
-    nome = str(nome_arquivo or "").lower()
-    return nome.endswith((".docx", ".doc"))
-
-
-def _preparar_upload_gemini(arquivo: Any) -> tuple[str, bytes, str, str]:
-    """Prepara arquivo para upload na Files API.
-
-    PDF segue original. Word/DOCX é convertido para um .txt estruturado, porque
-    application/vnd.openxmlformats-officedocument.wordprocessingml.document
-    não é aceito pela Files API no fluxo atual.
-
-    Retorna: nome_display, conteudo_bytes, suffix, mime_type.
-    """
-    nome = getattr(arquivo, "name", "documento")
-
-    if _arquivo_word(nome):
-        try:
-            arquivo.seek(0)
-            texto_word = ler_docx(arquivo)
-        except Exception as erro:
-            texto_word = f"Erro ao converter Word/DOCX para texto: {erro}"
-
-        texto_word = (
-            "DOCUMENTO WORD/DOCX CONVERTIDO PARA TEXTO ESTRUTURADO PARA ANÁLISE DO GEMINI\n"
-            f"ARQUIVO ORIGINAL: {nome}\n"
-            "OBSERVAÇÃO: o binário DOCX não foi enviado porque a Gemini Files API rejeita esse MIME type.\n"
-            "O conteúdo abaixo foi extraído mantendo parágrafos e tabelas quando possível.\n\n"
-            + str(texto_word or "")
-        )
-        nome_txt = f"{nome}.txt"
-        return nome_txt, texto_word.encode("utf-8", errors="ignore"), ".txt", "text/plain"
-
-    arquivo.seek(0)
-    conteudo = arquivo.read()
-    suffix = Path(nome).suffix or ".bin"
-    return nome, conteudo, suffix, _mime_type_arquivo(nome)
-
-
 def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -> str:
-    """Prompt reforçado quando os arquivos originais são enviados ao Gemini."""
+    """Prompt reforçado para quando os arquivos originais são enviados ao Gemini."""
     lista = "\n".join(f"- {nome}" for nome in nomes_arquivos) or "- Não informado"
 
     return f"""
 ATENÇÃO: nesta análise você recebeu os ARQUIVOS ORIGINAIS anexados, além do texto extraído como apoio técnico.
 
-COMO ANALISAR
-1. Use os arquivos originais como fonte principal. Quando o arquivo for Word/DOCX, ele pode ter sido convertido para TXT estruturado por limitação de MIME da Files API; nesse caso, use esse TXT como representação fiel do Word.
-2. Navegue visualmente pelos documentos, páginas, anexos, tabelas, propostas comerciais, comentários, imagens e certificados de assinatura.
-3. Entenda a relação entre contrato principal, termo aditivo, proposta comercial, proposta técnica, orçamento, e-mail de aprovação e certificado DocuSign.
-4. Quando houver documento assinado/DocuSign, priorize a versão assinada sobre minutas, versões antigas ou arquivos com comentários.
-5. Quando houver conflito entre contrato e proposta, siga a regra do próprio contrato sobre prevalência. Se o contrato disser que a proposta prevalece para escopo técnico/especificações/refeições, use a proposta nesses pontos.
-6. Quando houver divergência entre o texto extraído e o arquivo original, priorize o arquivo original.
-7. Use o texto extraído apenas como apoio para localização de trechos.
+COMO ANALISAR OS DOCUMENTOS
+1. Use os arquivos originais como fonte principal.
+2. Navegue visualmente pelos documentos, páginas, anexos, propostas comerciais, tabelas de valores, quadros de composição, certificados DocuSign e e-mails.
+3. Entenda a relação entre contrato principal, termo aditivo, proposta comercial, proposta técnica, orçamento, anexos, e-mails e certificado de assinatura.
+4. Quando houver divergência entre texto extraído e arquivo original, priorize o arquivo original.
+5. Quando houver documento assinado ou certificado DocuSign concluído, ele prevalece sobre minutas e versões antigas.
+6. Não marque contrato como pendente de assinatura se existir versão assinada ou certificado DocuSign completed no pacote.
+7. Se a proposta/anexo contiver tabela visual com valores, extraia os itens da tabela mesmo que o texto OCR esteja ruim.
 8. Faça uma análise contextual, como se estivesse revisando o pacote documental completo.
 9. Mesmo fazendo análise contextual, retorne APENAS JSON válido para o sistema.
+
+REGRAS ESPECIAIS PARA REFEIÇÕES / ALIMENTAÇÃO / REFEITÓRIO
+- Se houver tabela de valores com refeições, extraia cada linha comercial como item_contrato.
+- Para o caso de refeição transportada, itens esperados podem ser: Desjejum, Almoço, Café da tarde, Jantar, Ceia, quando existirem na tabela de valores.
+- Capture quantidade estimada/mês, valor unitário e valor total da linha.
+- Não transforme composição nutricional/cardápio (pão, arroz, feijão, salada, proteína etc.) em item financeiro, salvo se houver preço unitário da composição.
+- Equipamentos, utensílios, louças, talheres, descartáveis e máquina de suco devem aparecer como escopo/itens inclusos se não houver preço unitário próprio; não invente valor unitário.
+- Se houver quadro dizendo "Confirmamos a inexistência de volume mínimo faturável ou taxas adicionais", não classifique como pendência de volume mínimo, a menos que outro documento final assinado contradiga isso.
 
 ARQUIVOS ORIGINAIS RECEBIDOS:
 {lista}
@@ -1596,35 +1479,20 @@ ARQUIVOS ORIGINAIS RECEBIDOS:
 """ + prompt_ia(texto)
 
 
-def _subir_arquivos_originais_gemini(client, arquivos_originais: Any) -> tuple[list, list, list]:
-    """Salva temporariamente e envia arquivos usando google-genai >= 2.x.
-
-    PDF é enviado como arquivo original. DOC/DOCX é convertido para TXT antes
-    do upload, porque a Files API retornou INVALID_ARGUMENT para o MIME type
-    application/vnd.openxmlformats-officedocument.wordprocessingml.document.
-    Assim, um DOCX não derruba a análise inteira nem força fallback para texto.
-    """
+def _subir_arquivos_originais_gemini(genai, arquivos_originais: Any) -> tuple[list, list]:
+    """Salva temporariamente e envia os arquivos originais para o Gemini Files API."""
     uploaded_files = []
     temp_paths = []
-    avisos_upload = []
 
     if not arquivos_originais:
-        return uploaded_files, temp_paths, avisos_upload
+        return uploaded_files, temp_paths
 
     for arquivo in arquivos_originais:
-        nome_original = getattr(arquivo, "name", "documento")
         try:
-            nome_upload, conteudo, suffix, mime = _preparar_upload_gemini(arquivo)
-
-            if not conteudo:
-                avisos_upload.append(f"{nome_original}: arquivo vazio ou sem conteúdo extraível.")
-                continue
-
-            if _arquivo_word(nome_original):
-                avisos_upload.append(
-                    f"{nome_original}: DOC/DOCX convertido para TXT estruturado antes do upload "
-                    "porque a Files API não aceitou o MIME type do Word."
-                )
+            nome = getattr(arquivo, "name", "documento")
+            arquivo.seek(0)
+            conteudo = arquivo.read()
+            suffix = Path(nome).suffix or ".bin"
 
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
             tmp.write(conteudo)
@@ -1632,37 +1500,38 @@ def _subir_arquivos_originais_gemini(client, arquivos_originais: Any) -> tuple[l
             tmp.close()
             temp_paths.append(tmp.name)
 
-            uploaded = client.files.upload(
-                file=tmp.name,
-                config={
-                    "mime_type": mime,
-                    "display_name": nome_upload,
-                },
+            uploaded = genai.upload_file(
+                path=tmp.name,
+                mime_type=_mime_type_arquivo(nome),
+                display_name=nome,
             )
 
-            # Alguns arquivos podem ficar em processamento por alguns segundos.
+            # Alguns arquivos podem ficar em processamento por poucos segundos.
             for _ in range(45):
                 state = getattr(getattr(uploaded, "state", None), "name", "")
                 if state and state.upper() == "PROCESSING":
                     time.sleep(1)
-                    uploaded = client.files.get(name=uploaded.name)
+                    uploaded = genai.get_file(uploaded.name)
                 else:
                     break
 
             uploaded_files.append(uploaded)
 
         except Exception as erro:
-            avisos_upload.append(f"{nome_original}: {erro}")
+            st.warning(
+                f"Não consegui enviar o arquivo original para a IA: {getattr(arquivo, 'name', 'arquivo')}. "
+                f"Usarei o texto extraído como apoio. Detalhe: {erro}"
+            )
 
-    return uploaded_files, temp_paths, avisos_upload
+    return uploaded_files, temp_paths
 
 
-def _limpar_uploads_gemini(client, uploaded_files: list, temp_paths: list) -> None:
+def _limpar_uploads_gemini(genai, uploaded_files: list, temp_paths: list) -> None:
     """Remove temporários locais e tenta remover arquivos da área temporária da API."""
     for uploaded in uploaded_files or []:
         try:
             if getattr(uploaded, "name", None):
-                client.files.delete(name=uploaded.name)
+                genai.delete_file(uploaded.name)
         except Exception:
             pass
 
@@ -1673,143 +1542,62 @@ def _limpar_uploads_gemini(client, uploaded_files: list, temp_paths: list) -> No
             pass
 
 
-def _extrair_texto_resposta_gemini(resp: Any) -> str:
-    """Extrai texto de resposta do SDK novo ou legado."""
-    txt = getattr(resp, "text", None)
-    if txt:
-        return str(txt)
-    try:
-        return resp.candidates[0].content.parts[0].text
-    except Exception:
-        return str(resp)
-
-
-def _json_da_resposta_gemini(resp: Any) -> Dict[str, Any]:
-    content = (
-        _extrair_texto_resposta_gemini(resp)
-        .strip()
-        .replace("```json", "")
-        .replace("```", "")
-        .strip()
-    )
-    return json.loads(content)
-
-
-def _gerar_com_sdk_novo(client: Any, modelo: str, prompt_final: str, uploaded_files: list) -> Dict[str, Any]:
-    """Gera análise usando google-genai >= 2.x, com arquivos originais anexados."""
-    contents = [prompt_final] + list(uploaded_files or [])
-    resp = client.models.generate_content(
-        model=modelo,
-        contents=contents,
-        config={
-            "temperature": 0.0,
-            "top_p": 0.2,
-            "response_mime_type": "application/json",
-        },
-    )
-    return _json_da_resposta_gemini(resp)
-
-
-def _gerar_texto_com_sdk_legado(texto: str, api_key: str, modelo: str) -> Dict[str, Any]:
-    """Fallback compatível com o fluxo antigo: envia apenas o texto extraído."""
-    import google.generativeai as genai_legacy
-
-    genai_legacy.configure(api_key=api_key)
-    model = genai_legacy.GenerativeModel(modelo)
-    resp = model.generate_content(
-        prompt_ia(texto),
-        generation_config={
-            "temperature": 0.0,
-            "top_p": 0.2,
-            "response_mime_type": "application/json",
-        },
-    )
-    return _json_da_resposta_gemini(resp)
-
-
 def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
-    """Analisa com Gemini.
+    import google.generativeai as genai
 
-    Fluxo principal: google-genai >= 2.x + Files API para enviar os documentos originais.
-    Fallback: fluxo antigo por texto extraído, caso a biblioteca nova não esteja disponível
-    ou caso o upload/generation multimodal falhe.
-    """
+    genai.configure(api_key=api_key)
+
     modelos = MODELOS_GEMINI.get(opcao_modelo, MODELOS_GEMINI["Automático recomendado"])
+    uploaded_files, temp_paths = _subir_arquivos_originais_gemini(genai, arquivos_originais)
     nomes_arquivos = [getattr(a, "name", "documento") for a in (arquivos_originais or [])]
+    prompt_final = _prompt_ia_com_documentos_originais(texto, nomes_arquivos) if uploaded_files else prompt_ia(texto)
 
-    # 1) Tenta fluxo novo: documentos originais + texto extraído.
-    ultimo_erro_multimodal = None
-    uploaded_files: list = []
-    temp_paths: list = []
+    ultimo_erro = None
 
-    if arquivos_originais:
-        try:
-            from google import genai as genai_new
-
-            client = genai_new.Client(api_key=api_key)
-            uploaded_files, temp_paths, erros_upload = _subir_arquivos_originais_gemini(client, arquivos_originais)
-
-            if erros_upload:
-                with st.expander("⚠️ Detalhes de preparação/upload dos arquivos para o Gemini", expanded=False):
-                    st.write("Avisos do envio para a Files API:")
-                    for erro in erros_upload:
-                        st.write(f"- {erro}")
-
-            if uploaded_files:
-                prompt_final = _prompt_ia_com_documentos_originais(texto, nomes_arquivos)
-                for nome in modelos:
-                    try:
-                        resultado_json = _gerar_com_sdk_novo(client, nome, prompt_final, uploaded_files)
-                        if isinstance(resultado_json, dict):
-                            resultado_json["modelo_ia"] = nome
-                            resultado_json["modo_analise_ia"] = "Documentos originais + texto extraído"
-                            resultado_json["arquivos_originais_enviados"] = len(uploaded_files)
-                        st.success(f"IA utilizada: {nome} • documentos/anexos analisados pela Files API")
-                        return resultado_json
-                    except Exception as e:
-                        ultimo_erro_multimodal = e
-                        if opcao_modelo != "Automático recomendado":
-                            raise Exception(f"Erro ao usar o modelo {nome} com documentos originais. Detalhe: {e}")
-                        continue
-        except Exception as e:
-            ultimo_erro_multimodal = e
-        finally:
+    try:
+        for nome in modelos:
             try:
-                if 'client' in locals():
-                    _limpar_uploads_gemini(client, uploaded_files, temp_paths)
-            except Exception:
-                pass
+                model = genai.GenerativeModel(nome)
+                conteudo = [prompt_final] + uploaded_files if uploaded_files else prompt_final
 
-    # 2) Fallback: versão anterior, usando texto extraído.
-    ultimo_erro_texto = None
-    for nome in modelos:
-        try:
-            resultado_json = _gerar_texto_com_sdk_legado(texto, api_key, nome)
-            if isinstance(resultado_json, dict):
-                resultado_json["modelo_ia"] = nome
-                resultado_json["modo_analise_ia"] = "Texto extraído"
-                if ultimo_erro_multimodal:
-                    resultado_json["erro_upload_documentos_originais"] = str(ultimo_erro_multimodal)
-
-            if ultimo_erro_multimodal:
-                st.warning(
-                    "Não foi possível concluir a análise com documentos originais. "
-                    "O sistema usou o texto extraído como fallback. "
-                    f"Detalhe: {ultimo_erro_multimodal}"
+                resp = model.generate_content(
+                    conteudo,
+                    generation_config={
+                        "temperature": 0.0,
+                        "top_p": 0.2,
+                        "response_mime_type": "application/json",
+                    },
                 )
-            st.success(f"IA utilizada: {nome} • texto extraído analisado")
-            return resultado_json
-        except Exception as e:
-            ultimo_erro_texto = e
-            if opcao_modelo != "Automático recomendado":
-                raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
-            continue
 
-    raise Exception(
-        "Nenhum modelo Gemini disponível. "
-        f"Erro documentos originais: {ultimo_erro_multimodal}. "
-        f"Erro texto extraído: {ultimo_erro_texto}."
-    )
+                content = (
+                    resp.text
+                    .strip()
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
+
+                if uploaded_files:
+                    st.success(f"IA utilizada: {nome} • documentos originais analisados")
+                else:
+                    st.success(f"IA utilizada: {nome} • texto extraído analisado")
+
+                resultado_json = json.loads(content)
+                if isinstance(resultado_json, dict):
+                    resultado_json["modelo_ia"] = nome
+                    resultado_json["modo_analise_ia"] = "Documentos originais + texto extraído" if uploaded_files else "Texto extraído"
+                return resultado_json
+
+            except Exception as e:
+                ultimo_erro = e
+                if opcao_modelo != "Automático recomendado":
+                    raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
+                continue
+
+        raise Exception(f"Nenhum modelo Gemini disponível. Detalhe: {ultimo_erro}")
+
+    finally:
+        _limpar_uploads_gemini(genai, uploaded_files, temp_paths)
 
 def formatar_cnpj(valor: Any) -> str:
     txt = clean_text(valor)
@@ -1830,251 +1618,6 @@ def resumir_campo(valor: Any, limite: int = 220) -> str:
         return txt
     corte = txt[:limite].rsplit(" ", 1)[0]
     return corte + "..."
-
-
-# =========================================================
-# PÓS-VALIDAÇÃO DOCUMENTAL: VALORES, DATAS E ASSINANTES
-# =========================================================
-_MESES_PT = {
-    "janeiro": "01", "fevereiro": "02", "março": "03", "marco": "03",
-    "abril": "04", "maio": "05", "junho": "06", "julho": "07",
-    "agosto": "08", "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12",
-}
-
-
-def _data_textual_para_br(valor: Any) -> str:
-    txt = clean_text(valor)
-    m = re.search(r"(\d{1,2})\s+de\s+([A-Za-zçÇãáéíóúâêôõ]+)\s+de\s+(\d{4})", txt, flags=re.IGNORECASE)
-    if not m:
-        return txt if _valor_informado(txt) else "Não localizado"
-    dia = int(m.group(1))
-    mes = _MESES_PT.get(m.group(2).lower(), "")
-    ano = m.group(3)
-    if not mes:
-        return txt
-    return f"{dia:02d}/{mes}/{ano}"
-
-
-def _formatar_data_slash(valor: Any) -> str:
-    txt = clean_text(valor)
-    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", txt)
-    if not m:
-        return txt if _valor_informado(txt) else "Não localizado"
-    a, b, ano = int(m.group(1)), int(m.group(2)), m.group(3)
-    # DocuSign costuma trazer M/D/YYYY. Se o segundo número > 12, converte para DD/MM/YYYY.
-    if b > 12 and a <= 12:
-        return f"{b:02d}/{a:02d}/{ano}"
-    return f"{a:02d}/{b:02d}/{ano}"
-
-
-def _extrair_data_contrato(texto: str) -> str:
-    txt = str(texto or "")
-    padroes = [
-        r"São Paulo,\s*(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõ]+\s+de\s+\d{4})",
-        r"Sao Paulo,\s*(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõ]+\s+de\s+\d{4})",
-        r"(?:Data do Contrato|Data do contrato)[:\s-]+(\d{1,2}/\d{1,2}/\d{4})",
-    ]
-    for p in padroes:
-        m = re.search(p, txt, flags=re.IGNORECASE)
-        if m:
-            val = m.group(1)
-            return _data_textual_para_br(val) if " de " in val.lower() else _formatar_data_slash(val)
-    return "Não localizado"
-
-
-def _extrair_data_conclusao_docusign(texto: str) -> str:
-    txt = str(texto or "")
-    padroes = [
-        r"Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4})",
-        r"Envelope\s+Summary\s+Events[\s\S]{0,700}?Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4})",
-        r"Status:\s*Completed[\s\S]{0,2000}?Completed\s+Security\s+Checked\s+(\d{1,2}/\d{1,2}/\d{4})",
-    ]
-    for p in padroes:
-        m = re.search(p, txt, flags=re.IGNORECASE)
-        if m:
-            return _formatar_data_slash(m.group(1))
-    # fallback: última assinatura individual do certificado
-    assinaturas = re.findall(r"Signed:\s*(\d{1,2}/\d{1,2}/\d{4})", txt, flags=re.IGNORECASE)
-    if assinaturas:
-        return _formatar_data_slash(assinaturas[-1])
-    return "Não localizado"
-
-
-def _extrair_assinantes_docusign(texto: str) -> list[str]:
-    txt = str(texto or "")
-    low = txt.lower()
-    if "docusign" not in low and "signer events" not in low and "certificate of completion" not in low:
-        return []
-
-    start = low.find("signer events")
-    if start < 0:
-        start = low.find("certificate of completion")
-    seg = txt[start:] if start >= 0 else txt
-    finais = [
-        "in person signer events", "editor delivery events", "agent delivery events",
-        "intermediary delivery events", "certified delivery events", "carbon copy events",
-        "witness events", "notary events", "envelope summary events", "payment events",
-    ]
-    seg_low = seg.lower()
-    cortes = [seg_low.find(f) for f in finais if seg_low.find(f) > 0]
-    if cortes:
-        seg = seg[:min(cortes)]
-
-    linhas = [clean_text(l) for l in seg.splitlines() if clean_text(l) not in ("", "Não localizado")]
-    nomes: list[str] = []
-    for i, linha in enumerate(linhas[:-1]):
-        prox = linhas[i + 1]
-        if "@" not in prox:
-            continue
-        if "@" in linha or re.search(r"\d", linha):
-            continue
-        low_l = linha.lower()
-        bloqueios = [
-            "signer events", "signature timestamp", "security level", "electronic record",
-            "using ip", "docusign", "not offered", "accepted", "signature adoption",
-            "grupo sbf", "max fast", "none", "sent", "viewed", "signed",
-        ]
-        if any(b in low_l for b in bloqueios):
-            continue
-        # Evita cargos/áreas. Nome real costuma ter 2+ palavras e não termina com pontuação técnica.
-        palavras = re.findall(r"[A-Za-zÀ-ÿ]+", linha)
-        if len(palavras) < 2:
-            continue
-        nome = re.sub(r"\s+", " ", linha).strip(" -:;,.|")
-        if nome and nome not in nomes:
-            nomes.append(nome)
-    return nomes
-
-
-def _parse_moeda_brasil(valor: Any) -> float | None:
-    txt = str(clean_text(valor))
-    if not _valor_informado(txt):
-        return None
-    m = re.search(r"(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|[0-9]+(?:,[0-9]{2})?)", txt)
-    if not m:
-        return None
-    num = m.group(1).replace(".", "").replace(",", ".")
-    try:
-        return float(num)
-    except Exception:
-        return None
-
-
-def _formatar_moeda_brasil(valor: float, sufixo: str = "") -> str:
-    s = f"R$ {valor:,.2f}"
-    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-    return (s + (f" {sufixo}" if sufixo else "")).strip()
-
-
-def _extrair_meses_vigencia(texto: str, base: Dict[str, Any] | None = None) -> int | None:
-    candidatos = [str(texto or "")]
-    if base:
-        candidatos.extend([str(base.get("vigencia_apos_assinatura") or ""), str(base.get("vigencia") or "")])
-    plano = " ".join(candidatos)
-    m = re.search(r"(\d{1,3})\s*(?:\([^)]*\)\s*)?mes(?:es)?", plano, flags=re.IGNORECASE)
-    if m:
-        try:
-            return int(m.group(1))
-        except Exception:
-            return None
-    return None
-
-
-def _somar_valores_itens(itens: Any) -> float | None:
-    itens_norm = normalizar_itens_contrato(itens)
-    total = 0.0
-    encontrou = False
-    for item in itens_norm:
-        v = _parse_moeda_brasil(item.get("Valor total"))
-        if v is not None:
-            total += v
-            encontrou = True
-    return total if encontrou and total > 0 else None
-
-
-def _extrair_total_mensal_texto(texto: str) -> float | None:
-    txt = str(texto or "")
-    # Busca totais próximos de tabelas de proposta/cenário final.
-    padroes = [
-        r"TOTAL\s+(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|[0-9]+,[0-9]{2})",
-        r"CDB\s+Final[^R$]{0,80}R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})",
-        r"valor\s+mensal\s+estimado[^R$]{0,80}R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})",
-    ]
-    valores = []
-    for p in padroes:
-        for m in re.finditer(p, txt, flags=re.IGNORECASE):
-            v = _parse_moeda_brasil(m.group(1))
-            if v is not None:
-                valores.append(v)
-    if valores:
-        # Em propostas de alimentação o menor total relevante costuma ser mensal; evita totais de vigência calculados.
-        return min(valores)
-    return None
-
-
-def aplicar_regras_finais_contrato(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
-    """Blindagem final contra confusão de minuta, valor mensal x vigência e assinatura DocuSign."""
-    texto = str(texto or "")
-    low = texto.lower()
-
-    data_contrato = _extrair_data_contrato(texto)
-    data_docusign = _extrair_data_conclusao_docusign(texto)
-    assinantes = _extrair_assinantes_docusign(texto)
-
-    if _valor_informado(data_contrato):
-        base["data_contrato"] = data_contrato
-    if _valor_informado(data_docusign):
-        base["data_conclusao_docusign"] = data_docusign
-        base["data_assinatura"] = data_docusign
-
-    if assinantes:
-        base["assinantes"] = assinantes
-        base["pessoas_que_assinaram"] = "; ".join(assinantes)
-
-    docusign_completed = bool(re.search(r"Certificate Of Completion|Certificate of Completion|Status:\s*Completed|Completed\s+Security\s+Checked", texto, flags=re.IGNORECASE))
-    if docusign_completed:
-        base["contrato_assinado"] = "Sim"
-        base["alerta_assinatura"] = "Contrato assinado eletronicamente via DocuSign / Certificate of Completion."
-        if str(base.get("status", "")).strip().lower() in ("", "não localizado", "pendente de assinatura", "em negociação / pendente de assinatura"):
-            base["status"] = "Ativo"
-        # Remove pendências de assinatura herdadas de minutas antigas.
-        pend_filtradas = []
-        for p in base.get("pendencias", []) if isinstance(base.get("pendencias"), list) else []:
-            txtp = json.dumps(p, ensure_ascii=False).lower() if isinstance(p, dict) else str(p).lower()
-            if "assinatura" in txtp or "assinar" in txtp or "docusign" in txtp:
-                continue
-            pend_filtradas.append(p)
-        base["pendencias"] = pend_filtradas
-
-        checklist = []
-        for item in base.get("checklist", []) if isinstance(base.get("checklist"), list) else []:
-            if isinstance(item, dict):
-                val = str(item.get("Validação") or item.get("validacao") or item.get("validação") or "").lower()
-                if "assinatura" in val or "assinado" in val:
-                    item["Status"] = "Aprovado"
-                    item["Evidência"] = base.get("alerta_assinatura")
-            checklist.append(item)
-        base["checklist"] = checklist
-
-    itens = normalizar_itens_contrato(base.get("itens_contrato", []))
-    mensal = _somar_valores_itens(itens) or _extrair_total_mensal_texto(texto)
-    meses = _extrair_meses_vigencia(texto, base)
-    atual = _parse_moeda_brasil(base.get("valor_contrato_original") or base.get("valor_total"))
-
-    if mensal:
-        base["valor_mensal_estimado"] = _formatar_moeda_brasil(mensal, "mensais estimados")
-        # Se o valor original estiver igual ao valor da vigência, volta o valor original para o mensal.
-        if meses and atual and abs(atual - (mensal * meses)) <= max(10.0, mensal * 0.01):
-            base["valor_total_estimado_vigencia"] = _formatar_moeda_brasil(atual, f"(estimado para {meses} meses)")
-            base["valor_contrato_original"] = _formatar_moeda_brasil(mensal, "mensais estimados")
-            base["valor_total"] = base["valor_contrato_original"]
-        elif meses:
-            base.setdefault("valor_total_estimado_vigencia", _formatar_moeda_brasil(mensal * meses, f"(estimado para {meses} meses)"))
-            if not atual or (atual and atual > mensal * 3):
-                base["valor_contrato_original"] = _formatar_moeda_brasil(mensal, "mensais estimados")
-                base["valor_total"] = base["valor_contrato_original"]
-
-    return base
 
 
 def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
@@ -2133,16 +1676,6 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         "descricao_servico_material": "descricao_servico_material",
         "vigencia_apos_a_data_de_assinatura": "vigencia_apos_assinatura",
         "valor_do_contrato_original": "valor_contrato_original",
-        "valor_mensal": "valor_mensal_estimado",
-        "valor_mensal_estimado": "valor_mensal_estimado",
-        "valor_total_da_vigencia": "valor_total_estimado_vigencia",
-        "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
-        "data_do_contrato": "data_contrato",
-        "data_conclusao_docusign": "data_conclusao_docusign",
-        "data_de_conclusao_docusign": "data_conclusao_docusign",
-        "assinantes": "pessoas_que_assinaram",
-        "pessoas_que_assinaram": "pessoas_que_assinaram",
-        "pessoas_que_assinaram_o_contrato": "pessoas_que_assinaram",
     }
     def _vazio(valor: Any) -> bool:
         txt = clean_text(valor)
@@ -2173,8 +1706,6 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         base["itens_contrato"] = itens_ia
     else:
         base["itens_contrato"] = extrair_itens_local(str(texto_fallback or ""))
-
-    base = aplicar_regras_finais_contrato(base, str(texto_fallback or ""))
 
     for lista in ["checklist", "pendencias"]:
         for item in base.get(lista, []):
@@ -2421,14 +1952,9 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Contraparte", contraparte),
         ("CNPJ Contraparte", cnpj_contraparte),
         ("Valor do Contrato", valor_contrato),
-        ("Valor Mensal Estimado", v("valor_mensal_estimado")),
-        ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Vigência", vigencia),
         ("Pagamento", pagamento),
         ("Data da Assinatura", data_assinatura),
-        ("Data do Contrato", v("data_contrato")),
-        ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
-        ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
         ("Modelo IA", modelo_ia),
     ], row_height=30)
@@ -2449,14 +1975,9 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Contraparte", contraparte),
         ("CNPJ Contraparte", cnpj_contraparte),
         ("Valor do Contrato", valor_contrato),
-        ("Valor Mensal Estimado", v("valor_mensal_estimado")),
-        ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Condição de Pagamento", pagamento),
         ("Vigência", vigencia),
         ("Data da Assinatura", data_assinatura),
-        ("Data do Contrato", v("data_contrato")),
-        ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
-        ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
         ("Origem", origem),
         ("Modelo IA", modelo_ia),
@@ -2716,10 +2237,8 @@ def _resumir_arquivos_excel(valor: Any) -> str:
 def _preparar_historico_excel(df: pd.DataFrame) -> pd.DataFrame:
     """Padroniza colunas do histórico para exportação executiva."""
     colunas = [
-        "ID", "Data da análise", "Contraparte", "CNPJ", "Valor total",
-        "Valor mensal estimado", "Valor total estimado da vigência",
-        "Data do contrato", "Data conclusão DocuSign", "Pessoas que assinaram",
-        "Vigência", "Status", "Risco", "Score", "Assinado", "Modelo IA", "Origem", "Arquivos analisados",
+        "ID", "Data da análise", "Contraparte", "CNPJ", "Valor total", "Vigência",
+        "Status", "Risco", "Score", "Assinado", "Modelo IA", "Origem", "Arquivos analisados",
     ]
     base = df.copy() if df is not None else pd.DataFrame(columns=colunas)
     for col in colunas:
@@ -2880,18 +2399,14 @@ def gerar_excel_historico_profissional(export_df: pd.DataFrame, total_geral: int
         last_row = start_row + total_filtrado
         # Mantém filtro sem criar Tabela estruturada do Excel.
         # Isso evita erro de reparo em /xl/tables/table1.xml ao abrir o arquivo.
-        ultima_coluna = get_column_letter(len(df.columns))
-        ws.auto_filter.ref = f"A{start_row}:{ultima_coluna}{last_row}"
+        ws.auto_filter.ref = f"A{start_row}:M{last_row}"
 
     widths = {
-        "A": 9, "B": 19, "C": 34, "D": 19, "E": 17,
-        "F": 22, "G": 25, "H": 18, "I": 22, "J": 46,
-        "K": 34, "L": 16, "M": 13, "N": 10, "O": 13,
-        "P": 18, "Q": 15, "R": 28,
+        "A": 9, "B": 19, "C": 36, "D": 19, "E": 17, "F": 48,
+        "G": 16, "H": 13, "I": 10, "J": 13, "K": 18, "L": 15, "M": 28,
     }
-    for idx_col in range(1, len(df.columns) + 1):
-        col_letter = get_column_letter(idx_col)
-        ws.column_dimensions[col_letter].width = widths.get(col_letter, 20)
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
 
     # =====================================================
     # ABA 3 - AUDITORIA
@@ -3094,8 +2609,6 @@ def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], 
             "cnpj_contraparte": row.get("cnpj"),
             "cnpj": row.get("cnpj"),
             "valor_contrato_original": row.get("valor_total"),
-            "valor_mensal_estimado": row.get("valor_mensal_estimado") if "valor_mensal_estimado" in row.index else "Não localizado",
-            "valor_total_estimado_vigencia": row.get("valor_total_estimado_vigencia") if "valor_total_estimado_vigencia" in row.index else "Não localizado",
             "valor_total": row.get("valor_total"),
             "vigencia_apos_assinatura": row.get("vigencia"),
             "vigencia": row.get("vigencia"),
@@ -3103,9 +2616,6 @@ def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], 
             "risco": row.get("risco"),
             "score": row.get("score"),
             "contrato_assinado": row.get("contrato_assinado"),
-            "data_contrato": row.get("data_contrato") if "data_contrato" in row.index else "Não localizado",
-            "data_conclusao_docusign": row.get("data_conclusao_docusign") if "data_conclusao_docusign" in row.index else "Não localizado",
-            "pessoas_que_assinaram": row.get("pessoas_que_assinaram") if "pessoas_que_assinaram" in row.index else "Não localizado",
             "modelo_ia": row.get("modelo_ia"),
             "tipo_origem": row.get("tipo_origem"),
             "arquivos_analisados": row.get("arquivo"),
@@ -3435,35 +2945,58 @@ if pagina == "🤖 Assistente IA":
         color:white;
         font-weight:700;
         margin-top:5px;
+        overflow-wrap:anywhere;
     }
 
-    .ai-chat-question{
-        background:#1a1f2a;
+    .ai-question-card{
+        background:#1a202b;
+        border-left:6px solid #ff4d4d;
         border-radius:14px;
-        padding:14px 18px;
-        margin:18px 0 10px;
+        padding:18px 20px;
+        margin:18px 0 18px 0;
         color:#ffffff;
         font-weight:800;
-        border-left:6px solid #ff4d4d;
+        box-shadow:0 14px 30px rgba(0,0,0,.18);
     }
 
-    .ai-chat-answer-wrap{
-        margin-top:12px;
-    }
-
-    .ai-chat-plain{
+    .ai-answer-card{
         background:linear-gradient(145deg,#101821,#0b1118);
-        border:1px solid rgba(215,191,117,.18);
+        border:1px solid rgba(250,204,21,.18);
         border-radius:18px;
         padding:22px 24px;
+        margin-top:14px;
+        margin-bottom:25px;
         color:#e5e7eb;
-        line-height:1.65;
+        box-shadow:0 18px 45px rgba(0,0,0,.22);
+    }
+
+    .ai-plain-answer{
+        color:#e5e7eb;
+        font-size:15px;
+        line-height:1.75;
         font-weight:650;
     }
 
-    .auditor-ai-box h3{
-        margin-top:0;
-        color:#f3d36b;
+    .ai-plain-answer strong{
+        color:#ffffff;
+    }
+
+    .ai-empty-box{
+        background:#111827;
+        border:1px dashed rgba(250,204,21,.35);
+        border-radius:14px;
+        padding:18px;
+        color:#cbd5e1;
+    }
+
+    @media (max-width: 1100px){
+        .ai-summary-grid{grid-template-columns:repeat(2,1fr);}
+        .ai-contract-grid{grid-template-columns:repeat(2,1fr);}
+    }
+
+    @media (max-width: 700px){
+        .ai-summary-grid{grid-template-columns:1fr;}
+        .ai-contract-grid{grid-template-columns:1fr;}
     }
 
     </style>
@@ -3543,16 +3076,16 @@ if pagina == "🤖 Assistente IA":
             </div>
             """
 
-        return dedent(html).strip()
+        return html
     
     def resumo_executivo_busca(df):
 
         if df.empty:
-            return dedent("""
-            <div class="auditor-ai-box">
-                <h3>📊 Resumo Executivo</h3>
-                <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
-            """).strip()
+            return """
+        <div class="auditor-ai-box">
+            <h3>📊 Resumo Executivo</h3>
+            <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
+        """
 
         score = round(
             pd.to_numeric(df["score"], errors="coerce")
@@ -3572,7 +3105,7 @@ if pagina == "🤖 Assistente IA":
         medio = (riscos=="MÉDIO").sum()
         baixo = (riscos=="BAIXO").sum()
 
-        return dedent(f"""
+        return f"""
         <div class="auditor-ai-box">
 
             <h3>📊 Resumo Executivo</h3>
@@ -3605,7 +3138,38 @@ if pagina == "🤖 Assistente IA":
                 </div>
 
             </div>
-        """).strip()
+        """
+
+    def resposta_eh_html(resposta):
+        r = str(resposta or "").strip().lower()
+        return r.startswith("<div") or '<div class="auditor-ai-box"' in r or "<div class='auditor-ai-box'" in r
+
+    def formatar_texto_ia(texto):
+        texto = safe(texto or "")
+        texto = texto.replace("\n", "<br>")
+        return texto
+
+    def render_resposta_ia(pergunta, resposta):
+        st.markdown(
+            f'''
+            <div class="ai-question-card">
+                🙋 {safe(pergunta)}
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
+
+        if resposta_eh_html(resposta):
+            st.markdown(str(resposta), unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'''
+                <div class="ai-answer-card">
+                    <div class="ai-plain-answer">{formatar_texto_ia(resposta)}</div>
+                </div>
+                ''',
+                unsafe_allow_html=True
+            )
 
     if pergunta:
         pergunta_lower = pergunta.lower()
@@ -3812,22 +3376,7 @@ if pagina == "🤖 Assistente IA":
         except Exception as erro:
             resposta = f"Erro ao consultar o histórico: {erro}"
 
-        resposta = dedent(str(resposta)).strip()
-
-        st.markdown(
-            f'<div class="ai-chat-question">🙋 {safe(pergunta)}</div>',
-            unsafe_allow_html=True,
-        )
-
-        resposta_html = any(tag in resposta.lower() for tag in ["<div", "<h3", "<p", "<span", "<table"])
-        if resposta_html:
-            st.markdown(f'<div class="ai-chat-answer-wrap">{resposta}</div>', unsafe_allow_html=True)
-        else:
-            resposta_limpa = safe(resposta).replace("\n", "<br>")
-            st.markdown(
-                f'<div class="ai-chat-answer-wrap"><div class="ai-chat-plain">{resposta_limpa}</div></div>',
-                unsafe_allow_html=True,
-            )
+        render_resposta_ia(pergunta, resposta)
 
     st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
@@ -3932,7 +3481,6 @@ if pagina == "📄 Nova Análise":
                 elif not resultado.get("itens_contrato"):
                     resultado["itens_contrato"] = extrair_itens_local(texto)
 
-                resultado = aplicar_regras_finais_contrato(resultado, texto)
                 resultado["data_analise"] = datetime.now().strftime("%d/%m/%Y %H:%M")
                 resultado["origem_contrato"] = origem_contrato
 
@@ -4070,51 +3618,50 @@ if pagina == "📚 Histórico":
     # Filtros profissionais
     # -------------------------
     st.markdown('<div class="section-title">Filtros</div>', unsafe_allow_html=True)
+    f1, f2, f3, f4 = st.columns([1.4, 1, 1, 1])
+
+    with f1:
+        busca = st.text_input(
+            "Buscar",
+            placeholder="Digite contraparte, CNPJ, arquivo, status ou modelo...",
+        ).strip()
 
     riscos_disponiveis = [r for r in ["ALTO", "MÉDIO", "BAIXO"] if r in set(hist["risco_norm"].dropna().astype(str))]
+    with f2:
+        riscos_sel = st.multiselect(
+            "Risco",
+            options=riscos_disponiveis,
+            default=riscos_disponiveis,
+        )
+
     origens_disponiveis = sorted([x for x in hist["tipo_origem"].dropna().astype(str).unique() if x and x != "Não informado"])
+    with f3:
+        origens_sel = st.multiselect(
+            "Origem",
+            options=origens_disponiveis,
+            default=origens_disponiveis,
+        )
+
     assinaturas_disponiveis = sorted([x for x in hist["contrato_assinado"].dropna().astype(str).unique() if x])
+    with f4:
+        assinatura_sel = st.multiselect(
+            "Assinatura",
+            options=assinaturas_disponiveis,
+            default=assinaturas_disponiveis,
+        )
+
+    f5, f6, f7, f8 = st.columns([1, 1, 1, 1])
     modelos_disponiveis = sorted([x for x in hist["modelo_ia"].dropna().astype(str).unique() if x])
     status_disponiveis = sorted([x for x in hist["status"].dropna().astype(str).unique() if x])
 
-    with st.container(border=True):
-        st.markdown("#### 🔎 Consulta do histórico")
-        st.caption("Use os filtros principais abaixo. Os filtros avançados ficam recolhidos para não poluir a tela.")
-
-        f1, f2, f3, f4 = st.columns([1.8, .8, .9, .9])
-
-        with f1:
-            busca = st.text_input(
-                "Buscar",
-                placeholder="Digite contraparte, CNPJ, arquivo, status ou modelo...",
-            ).strip()
-
-        with f2:
-            risco_opcao = st.selectbox("Risco", ["Todos"] + riscos_disponiveis, index=0)
-
-        with f3:
-            assinatura_opcao = st.selectbox("Assinatura", ["Todos"] + assinaturas_disponiveis, index=0)
-
-        with f4:
-            ordenar_por = st.selectbox("Ordenar por", ["Mais recentes", "Maior score", "Menor score", "Risco", "Contraparte"], index=0)
-
-        with st.expander("⚙️ Filtros avançados", expanded=False):
-            a1, a2, a3, a4 = st.columns([1, 1, 1, 1])
-            with a1:
-                origem_opcao = st.selectbox("Origem", ["Todas"] + origens_disponiveis, index=0)
-            with a2:
-                modelo_opcao = st.selectbox("Modelo IA", ["Todos"] + modelos_disponiveis, index=0)
-            with a3:
-                status_opcao = st.selectbox("Status", ["Todos"] + status_disponiveis, index=0)
-            with a4:
-                score_min, score_max = st.slider("Score", 0, 100, (0, 100))
-
-    # Converte seleção única em listas para reaproveitar a lógica de filtragem.
-    riscos_sel = riscos_disponiveis if risco_opcao == "Todos" else [risco_opcao]
-    origens_sel = origens_disponiveis if origem_opcao == "Todas" else [origem_opcao]
-    assinatura_sel = assinaturas_disponiveis if assinatura_opcao == "Todos" else [assinatura_opcao]
-    modelos_sel = modelos_disponiveis if modelo_opcao == "Todos" else [modelo_opcao]
-    status_sel = status_disponiveis if status_opcao == "Todos" else [status_opcao]
+    with f5:
+        modelos_sel = st.multiselect("Modelo IA", options=modelos_disponiveis, default=modelos_disponiveis)
+    with f6:
+        status_sel = st.multiselect("Status", options=status_disponiveis, default=status_disponiveis)
+    with f7:
+        score_min, score_max = st.slider("Score", 0, 100, (0, 100))
+    with f8:
+        ordenar_por = st.selectbox("Ordenar por", ["Mais recentes", "Maior score", "Menor score", "Risco", "Contraparte"])
 
     filtrado = hist.copy()
 
@@ -4174,51 +3721,17 @@ if pagina == "📚 Histórico":
     # -------------------------
     # Exportação filtrada
     # -------------------------
-    filtrado_export = filtrado.copy()
-
-    # Campos novos ficam dentro do resultado_json no histórico. Aqui extraímos para o Excel.
-    def _hist_json_val(row, chave: str, padrao: str = "Não informado") -> str:
-        try:
-            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
-            valor = payload.get(chave, padrao)
-            if valor in (None, "", [], {}, "Não localizado", "Não localizada"):
-                return padrao
-            if isinstance(valor, (list, dict)):
-                return json.dumps(valor, ensure_ascii=False)
-            return str(valor)
-        except Exception:
-            return padrao
-
-    if "resultado_json" in filtrado_export.columns:
-        campos_json_excel = {
-            "valor_mensal_estimado": "valor_mensal_estimado",
-            "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
-            "data_contrato": "data_contrato",
-            "data_conclusao_docusign": "data_conclusao_docusign",
-            "pessoas_que_assinaram": "pessoas_que_assinaram",
-        }
-        for destino, chave_json in campos_json_excel.items():
-            if destino not in filtrado_export.columns:
-                filtrado_export[destino] = filtrado_export.apply(lambda row, ch=chave_json: _hist_json_val(row, ch), axis=1)
-
     export_cols = [
-        "id", "data_analise", "fornecedor", "cnpj", "valor_total",
-        "valor_mensal_estimado", "valor_total_estimado_vigencia",
-        "data_contrato", "data_conclusao_docusign", "pessoas_que_assinaram",
-        "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
+        "id", "data_analise", "fornecedor", "cnpj", "valor_total", "vigencia",
+        "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
     ]
-    export_df = filtrado_export[[c for c in export_cols if c in filtrado_export.columns]].copy()
+    export_df = filtrado[[c for c in export_cols if c in filtrado.columns]].copy()
     export_df = export_df.rename(columns={
         "id": "ID",
         "data_analise": "Data da análise",
         "fornecedor": "Contraparte",
         "cnpj": "CNPJ",
         "valor_total": "Valor total",
-        "valor_mensal_estimado": "Valor mensal estimado",
-        "valor_total_estimado_vigencia": "Valor total estimado da vigência",
-        "data_contrato": "Data do contrato",
-        "data_conclusao_docusign": "Data conclusão DocuSign",
-        "pessoas_que_assinaram": "Pessoas que assinaram",
         "vigencia": "Vigência",
         "status": "Status",
         "risco": "Risco",
