@@ -214,11 +214,16 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Streamlit
+# Secrets / variáveis locais
+.env
+.env.*
+!.env.example
 .streamlit/secrets.toml
 
-.env
+# Banco local
+*.db
 nexus_contract.db
+
+# Cache Python
 __pycache__/
-*.pyc
-.streamlit/secrets.toml
+*.py[cod]
