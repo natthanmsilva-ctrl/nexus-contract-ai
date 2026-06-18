@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List
+from textwrap import dedent
 
 import pandas as pd
 import sqlite3
@@ -543,6 +544,49 @@ button[kind="secondary"]:hover{
     .info-grid,.flow-grid,.contract-grid{grid-template-columns:1fr;}
     .contract-top,.card-footer{flex-direction:column;align-items:flex-start;}
 }
+
+/* Filtros do histórico mais limpos */
+div[data-testid="stExpander"]{
+    border:1px solid rgba(215,191,117,.22) !important;
+    border-radius:18px !important;
+    background:rgba(16,24,34,.42) !important;
+}
+
+div[data-testid="stExpander"] summary{
+    font-weight:900 !important;
+    color:#f3e6b3 !important;
+}
+
+.filter-note{
+    background:linear-gradient(135deg,rgba(0,60,47,.80),rgba(16,24,34,.88));
+    border:1px solid rgba(215,191,117,.28);
+    border-radius:16px;
+    padding:13px 16px;
+    color:#e5e7eb;
+    margin:14px 0 20px;
+    font-weight:700;
+}
+
+/* Assistente IA: evita aparência de bloco de código e melhora os cards */
+[data-testid="stChatMessage"] .auditor-ai-box{
+    width:100%;
+    box-sizing:border-box;
+}
+
+@media (max-width: 1100px){
+    .ai-summary-grid,
+    .ai-contract-grid{
+        grid-template-columns:repeat(2, minmax(0,1fr)) !important;
+    }
+}
+
+@media (max-width: 700px){
+    .ai-summary-grid,
+    .ai-contract-grid{
+        grid-template-columns:1fr !important;
+    }
+}
+
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -3460,16 +3504,16 @@ if pagina == "🤖 Assistente IA":
             </div>
             """
 
-        return html
+        return dedent(html).strip()
     
     def resumo_executivo_busca(df):
 
         if df.empty:
-            return """
-        <div class="auditor-ai-box">
-            <h3>📊 Resumo Executivo</h3>
-            <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
-        """
+            return dedent("""
+            <div class="auditor-ai-box">
+                <h3>📊 Resumo Executivo</h3>
+                <p class="subtle">Nenhum contrato encontrado para esta busca.</p>
+            """).strip()
 
         score = round(
             pd.to_numeric(df["score"], errors="coerce")
@@ -3489,7 +3533,7 @@ if pagina == "🤖 Assistente IA":
         medio = (riscos=="MÉDIO").sum()
         baixo = (riscos=="BAIXO").sum()
 
-        return f"""
+        return dedent(f"""
         <div class="auditor-ai-box">
 
             <h3>📊 Resumo Executivo</h3>
@@ -3522,7 +3566,7 @@ if pagina == "🤖 Assistente IA":
                 </div>
 
             </div>
-        """
+        """).strip()
 
     if pergunta:
         pergunta_lower = pergunta.lower()
@@ -3730,6 +3774,7 @@ if pagina == "🤖 Assistente IA":
             resposta = f"Erro ao consultar o histórico: {erro}"
 
         st.chat_message("user").write(pergunta)
+        resposta = dedent(str(resposta)).strip()
         st.chat_message("assistant").markdown(
             resposta,
             unsafe_allow_html=True
@@ -3976,50 +4021,52 @@ if pagina == "📚 Histórico":
     # Filtros profissionais
     # -------------------------
     st.markdown('<div class="section-title">Filtros</div>', unsafe_allow_html=True)
-    f1, f2, f3, f4 = st.columns([1.4, 1, 1, 1])
-
-    with f1:
-        busca = st.text_input(
-            "Buscar",
-            placeholder="Digite contraparte, CNPJ, arquivo, status ou modelo...",
-        ).strip()
 
     riscos_disponiveis = [r for r in ["ALTO", "MÉDIO", "BAIXO"] if r in set(hist["risco_norm"].dropna().astype(str))]
-    with f2:
-        riscos_sel = st.multiselect(
-            "Risco",
-            options=riscos_disponiveis,
-            default=riscos_disponiveis,
-        )
-
     origens_disponiveis = sorted([x for x in hist["tipo_origem"].dropna().astype(str).unique() if x and x != "Não informado"])
-    with f3:
-        origens_sel = st.multiselect(
-            "Origem",
-            options=origens_disponiveis,
-            default=origens_disponiveis,
-        )
-
     assinaturas_disponiveis = sorted([x for x in hist["contrato_assinado"].dropna().astype(str).unique() if x])
-    with f4:
-        assinatura_sel = st.multiselect(
-            "Assinatura",
-            options=assinaturas_disponiveis,
-            default=assinaturas_disponiveis,
-        )
-
-    f5, f6, f7, f8 = st.columns([1, 1, 1, 1])
     modelos_disponiveis = sorted([x for x in hist["modelo_ia"].dropna().astype(str).unique() if x])
     status_disponiveis = sorted([x for x in hist["status"].dropna().astype(str).unique() if x])
 
-    with f5:
-        modelos_sel = st.multiselect("Modelo IA", options=modelos_disponiveis, default=modelos_disponiveis)
-    with f6:
-        status_sel = st.multiselect("Status", options=status_disponiveis, default=status_disponiveis)
-    with f7:
-        score_min, score_max = st.slider("Score", 0, 100, (0, 100))
-    with f8:
-        ordenar_por = st.selectbox("Ordenar por", ["Mais recentes", "Maior score", "Menor score", "Risco", "Contraparte"])
+    with st.container(border=True):
+        st.markdown("#### 🔎 Consulta do histórico")
+        st.caption("Use os filtros principais abaixo. Os filtros avançados ficam recolhidos para não poluir a tela.")
+
+        f1, f2, f3, f4 = st.columns([1.8, .8, .9, .9])
+
+        with f1:
+            busca = st.text_input(
+                "Buscar",
+                placeholder="Digite contraparte, CNPJ, arquivo, status ou modelo...",
+                label_visibility="collapsed",
+            ).strip()
+
+        with f2:
+            risco_opcao = st.selectbox("Risco", ["Todos"] + riscos_disponiveis, index=0)
+
+        with f3:
+            assinatura_opcao = st.selectbox("Assinatura", ["Todos"] + assinaturas_disponiveis, index=0)
+
+        with f4:
+            ordenar_por = st.selectbox("Ordenar por", ["Mais recentes", "Maior score", "Menor score", "Risco", "Contraparte"], index=0)
+
+        with st.expander("⚙️ Filtros avançados", expanded=False):
+            a1, a2, a3, a4 = st.columns([1, 1, 1, 1])
+            with a1:
+                origem_opcao = st.selectbox("Origem", ["Todas"] + origens_disponiveis, index=0)
+            with a2:
+                modelo_opcao = st.selectbox("Modelo IA", ["Todos"] + modelos_disponiveis, index=0)
+            with a3:
+                status_opcao = st.selectbox("Status", ["Todos"] + status_disponiveis, index=0)
+            with a4:
+                score_min, score_max = st.slider("Score", 0, 100, (0, 100))
+
+    # Converte seleção única em listas para reaproveitar a lógica de filtragem.
+    riscos_sel = riscos_disponiveis if risco_opcao == "Todos" else [risco_opcao]
+    origens_sel = origens_disponiveis if origem_opcao == "Todas" else [origem_opcao]
+    assinatura_sel = assinaturas_disponiveis if assinatura_opcao == "Todos" else [assinatura_opcao]
+    modelos_sel = modelos_disponiveis if modelo_opcao == "Todos" else [modelo_opcao]
+    status_sel = status_disponiveis if status_opcao == "Todos" else [status_opcao]
 
     filtrado = hist.copy()
 
