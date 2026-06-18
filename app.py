@@ -567,6 +567,16 @@ div[data-testid="stExpander"] summary{
     font-weight:700;
 }
 
+/* Histórico: deixa filtros mais alinhados e elegantes */
+div[data-testid="stVerticalBlockBorderWrapper"] input,
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-baseweb="select"]{
+    min-height:42px;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] label{
+    min-height:22px;
+}
+
 /* Assistente IA: evita aparência de bloco de código e melhora os cards */
 [data-testid="stChatMessage"] .auditor-ai-box{
     width:100%;
@@ -3427,6 +3437,35 @@ if pagina == "🤖 Assistente IA":
         margin-top:5px;
     }
 
+    .ai-chat-question{
+        background:#1a1f2a;
+        border-radius:14px;
+        padding:14px 18px;
+        margin:18px 0 10px;
+        color:#ffffff;
+        font-weight:800;
+        border-left:6px solid #ff4d4d;
+    }
+
+    .ai-chat-answer-wrap{
+        margin-top:12px;
+    }
+
+    .ai-chat-plain{
+        background:linear-gradient(145deg,#101821,#0b1118);
+        border:1px solid rgba(215,191,117,.18);
+        border-radius:18px;
+        padding:22px 24px;
+        color:#e5e7eb;
+        line-height:1.65;
+        font-weight:650;
+    }
+
+    .auditor-ai-box h3{
+        margin-top:0;
+        color:#f3d36b;
+    }
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -3773,12 +3812,22 @@ if pagina == "🤖 Assistente IA":
         except Exception as erro:
             resposta = f"Erro ao consultar o histórico: {erro}"
 
-        st.chat_message("user").write(pergunta)
         resposta = dedent(str(resposta)).strip()
-        st.chat_message("assistant").markdown(
-            resposta,
-            unsafe_allow_html=True
+
+        st.markdown(
+            f'<div class="ai-chat-question">🙋 {safe(pergunta)}</div>',
+            unsafe_allow_html=True,
         )
+
+        resposta_html = any(tag in resposta.lower() for tag in ["<div", "<h3", "<p", "<span", "<table"])
+        if resposta_html:
+            st.markdown(f'<div class="ai-chat-answer-wrap">{resposta}</div>', unsafe_allow_html=True)
+        else:
+            resposta_limpa = safe(resposta).replace("\n", "<br>")
+            st.markdown(
+                f'<div class="ai-chat-answer-wrap"><div class="ai-chat-plain">{resposta_limpa}</div></div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
@@ -4038,7 +4087,6 @@ if pagina == "📚 Histórico":
             busca = st.text_input(
                 "Buscar",
                 placeholder="Digite contraparte, CNPJ, arquivo, status ou modelo...",
-                label_visibility="collapsed",
             ).strip()
 
         with f2:
