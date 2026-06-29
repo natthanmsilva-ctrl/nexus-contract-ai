@@ -14,7 +14,7 @@ import base64
 import tempfile
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 from textwrap import dedent
 
@@ -77,6 +77,7 @@ CAMPOS_OFICIAIS = [
     ("Condição de Pagamento em Dias", "condicao_pagamento_dias"),
     ("Multa", "multa"),
     ("Vigência após a data de assinatura", "vigencia_apos_assinatura"),
+    ("Período de Vigência", "periodo_vigencia_formatado"),
     ("Rescisão e Indenização", "rescisao_indenizacao"),
     ("Anticorrupção", "anticorrupcao"),
     ("Proteção de Dados LGPD", "protecao_dados_lgpd"),
@@ -299,7 +300,7 @@ section[data-testid="stSidebar"] *{
 
 .info-grid{
     display:grid;
-    grid-template-columns:repeat(4, minmax(0, 1fr));
+    grid-template-columns:repeat(3, minmax(0, 1fr));
     gap:16px;
 }
 
@@ -609,6 +610,65 @@ div[data-testid="stVerticalBlockBorderWrapper"] label{
     .ai-contract-grid{
         grid-template-columns:1fr !important;
     }
+}
+
+.valor-card{
+    background:linear-gradient(145deg,#101821,#0b1118);
+    border:1px solid rgba(215,191,117,.30);
+    border-radius:18px;
+    padding:18px;
+    min-height:135px;
+    box-shadow:0 10px 28px rgba(0,0,0,.24);
+    position:relative;
+    overflow:hidden;
+}
+
+.valor-card::before{
+    content:"";
+    position:absolute;
+    left:0;
+    top:0;
+    width:100%;
+    height:4px;
+    background:linear-gradient(90deg,#d7bf75,#065f46);
+}
+
+.valor-titulo{
+    color:#d7bf75;
+    font-weight:900;
+    text-transform:uppercase;
+    letter-spacing:.7px;
+    font-size:11px;
+    margin-bottom:12px;
+}
+
+.valor-principal{
+    color:#ffffff;
+    font-size:22px;
+    line-height:1.18;
+    font-weight:900;
+    margin-bottom:10px;
+    overflow-wrap:anywhere;
+}
+
+.valor-detalhe{
+    color:#d8dee9;
+    font-size:13px;
+    line-height:1.45;
+    font-weight:600;
+    overflow-wrap:anywhere;
+}
+
+.valor-alerta{
+    display:inline-block;
+    margin-top:12px;
+    padding:5px 10px;
+    border-radius:999px;
+    background:rgba(215,191,117,.12);
+    color:#f3e6b3;
+    border:1px solid rgba(215,191,117,.28);
+    font-size:11px;
+    font-weight:900;
 }
 
 </style>
@@ -1321,6 +1381,7 @@ def local_extract(texto: str) -> Dict[str, Any]:
         "condicao_pagamento_dias": condicao_pagamento,
         "multa": multa,
         "vigencia_apos_assinatura": vigencia,
+        "periodo_vigencia_formatado": "Não localizado",
         "rescisao_indenizacao": rescisao,
         "anticorrupcao": anticorrupcao,
         "indice_reajuste_anual": reajuste,
@@ -1411,6 +1472,7 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Condição de Pagamento em Dias = condicao_pagamento_dias
 - Multa = multa
 - Vigência após a data de assinatura = vigencia_apos_assinatura
+- Período de Vigência = periodo_vigencia_formatado
 - Rescisão e Indenização = rescisao_indenizacao
 - Anticorrupção = anticorrupcao
 - Proteção de Dados LGPD = protecao_dados_lgpd
@@ -2009,6 +2071,108 @@ def _extrair_meses_vigencia(texto: str, base: Dict[str, Any] | None = None) -> i
             return None
     return None
 
+def _parse_data_br_para_datetime(valor: Any) -> datetime | None:
+    txt = clean_text(valor)
+
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", txt)
+    if not m:
+        return None
+
+    try:
+        dia = int(m.group(1))
+        mes = int(m.group(2))
+        ano = int(m.group(3))
+        return datetime(ano, mes, dia)
+    except Exception:
+        return None
+
+
+def _ultimo_dia_mes(ano: int, mes: int) -> int:
+    if mes == 12:
+        proximo = datetime(ano + 1, 1, 1)
+    else:
+        proximo = datetime(ano, mes + 1, 1)
+    return (proximo - timedelta(days=1)).day
+
+
+def _somar_meses(data_base: datetime, meses: int) -> datetime:
+    mes_total = data_base.month - 1 + meses
+    ano = data_base.year + mes_total // 12
+    mes = mes_total % 12 + 1
+    dia = min(data_base.day, _ultimo_dia_mes(ano, mes))
+    return datetime(ano, mes, dia)
+
+
+def _extrair_anos_vigencia(texto: str, base: Dict[str, Any] | None = None) -> int | None:
+    candidatos = [str(texto or "")]
+    if base:
+        candidatos.extend([
+            str(base.get("vigencia_apos_assinatura") or ""),
+            str(base.get("vigencia") or ""),
+        ])
+
+    plano = " ".join(candidatos)
+
+    m = re.search(r"(\d{1,3})\s*(?:\([^)]*\)\s*)?ano(?:s)?", plano, flags=re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    return None
+
+
+def _montar_periodo_vigencia_formatado(base: Dict[str, Any], texto: str) -> str:
+    """
+    Monta o período de vigência no padrão:
+    Início DD/MM/AAAA até DD/MM/AAAA
+
+    Regra:
+    1. Início = Data Conclusão DocuSign
+    2. Se não tiver, usa Data da Assinatura
+    3. Se não tiver, usa Data do Contrato
+    4. Prazo indeterminado = 31/12/9999
+    5. Prazo em meses/anos = início + prazo - 1 dia
+    """
+    data_inicio = None
+
+    for chave_data in ("data_conclusao_docusign", "data_assinatura", "data_contrato"):
+        data_tentativa = _parse_data_br_para_datetime(base.get(chave_data))
+        if data_tentativa:
+            data_inicio = data_tentativa
+            break
+
+    if not data_inicio:
+        return "Não localizado"
+
+    inicio_fmt = data_inicio.strftime("%d/%m/%Y")
+
+    vigencia_txt = clean_text(base.get("vigencia_apos_assinatura") or base.get("vigencia"))
+    plano = f"{vigencia_txt} {texto}".lower()
+
+    if any(t in plano for t in [
+        "prazo indeterminado",
+        "vigência indeterminada",
+        "duracao indeterminada",
+        "duração indeterminada",
+        "por prazo indeterminado",
+    ]):
+        return f"Início {inicio_fmt} até 31/12/9999"
+
+    meses = _extrair_meses_vigencia(texto, base)
+
+    if not meses:
+        anos = _extrair_anos_vigencia(texto, base)
+        if anos:
+            meses = anos * 12
+
+    if meses:
+        data_fim = _somar_meses(data_inicio, meses) - timedelta(days=1)
+        fim_fmt = data_fim.strftime("%d/%m/%Y")
+        return f"Início {inicio_fmt} até {fim_fmt}"
+
+    return f"Início {inicio_fmt} até Não localizado"
 
 def _somar_valores_itens(itens: Any) -> float | None:
     itens_norm = normalizar_itens_contrato(itens)
@@ -2107,26 +2271,27 @@ def _formatar_valor_monetario_item(valor: Any) -> str:
 
 
 def _montar_total_materiais_servicos(itens: List[Dict[str, Any]], total: float | None) -> str:
-    if total is None or total <= 0:
-        return "Não identificado. Não foram localizados itens com valor total suficiente para somar materiais e serviços."
+    """Monta o resumo executivo do total de materiais/serviços sem jogar todos os itens dentro do card."""
+    itens_norm = normalizar_itens_contrato(itens)
 
-    detalhes = []
-    for item in itens[:8]:
-        desc = clean_text(item.get("Descrição") or item.get("descricao"))
+    qtd_itens_com_valor = 0
+    for item in itens_norm:
         valor = _parse_moeda_brasil(item.get("Valor total") or item.get("valor_total"))
-        if desc and valor is not None:
-            detalhes.append(f"{desc}: {_formatar_moeda_brasil(valor)}")
+        if valor is not None:
+            qtd_itens_com_valor += 1
 
-    texto = f"{_formatar_moeda_brasil(total)}. Soma dos valores totais dos materiais e serviços identificados nos documentos analisados."
-    if detalhes:
-        texto += " Itens considerados: " + "; ".join(detalhes)
-        if len(itens) > 8:
-            texto += f"; e mais {len(itens) - 8} item(ns)."
-        else:
-            texto += "."
-    texto += " Esse campo não representa necessariamente o valor global do contrato; representa a soma dos itens identificados."
-    return texto
+    if total is None or total <= 0:
+        return (
+            "Não identificado. "
+            "Não foram localizados itens com valor total suficiente para somar materiais e serviços."
+        )
 
+    return (
+        f"{_formatar_moeda_brasil(total)}. "
+        f"Soma dos valores totais de {qtd_itens_com_valor} item(ns) identificados nos documentos analisados. "
+        "Esse campo não representa necessariamente o valor global do contrato; representa apenas a soma dos itens identificados. "
+        "Consulte o detalhamento completo na tabela de materiais e serviços."
+    )
 
 def _formatar_valor_mensal_profissional(valor: Any, mensal_detectado: float | None = None, origem_itens: bool = False) -> str:
     txt = clean_text(valor)
@@ -2286,6 +2451,8 @@ def aplicar_regras_finais_contrato(base: Dict[str, Any], texto: str) -> Dict[str
             checklist.append(item)
         base["checklist"] = checklist
 
+    base["periodo_vigencia_formatado"] = _montar_periodo_vigencia_formatado(base, texto)
+
     itens = normalizar_itens_contrato(base.get("itens_contrato", []))
     meses = _extrair_meses_vigencia(texto, base)
     base = aplicar_regras_valores_profissionais(base, itens, texto, meses)
@@ -2352,6 +2519,9 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         "descricao_do_servico_material": "descricao_servico_material",
         "descricao_servico_material": "descricao_servico_material",
         "vigencia_apos_a_data_de_assinatura": "vigencia_apos_assinatura",
+        "periodo_de_vigencia": "periodo_vigencia_formatado",
+        "periodo_vigencia": "periodo_vigencia_formatado",
+        "vigencia_formatada": "periodo_vigencia_formatado",
         "valor_do_contrato_original": "valor_contrato_original",
         "valor_mensal": "valor_mensal_estimado",
         "valor_mensal_estimado": "valor_mensal_estimado",
@@ -2648,6 +2818,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Valor Mensal Estimado", v("valor_mensal_estimado")),
         ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Vigência", vigencia),
+        ("Período de Vigência", v("periodo_vigencia_formatado")),
         ("Pagamento", pagamento),
         ("Data da Assinatura", data_assinatura),
         ("Data do Contrato", v("data_contrato")),
@@ -2677,6 +2848,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Condição de Pagamento", pagamento),
         ("Vigência", vigencia),
+        ("Período de Vigência", v("periodo_vigencia_formatado")),
         ("Data da Assinatura", data_assinatura),
         ("Data do Contrato", v("data_contrato")),
         ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
@@ -3183,8 +3355,185 @@ def render_filter_metric(label: str, value: Any, filtro: str, ativo: bool = Fals
     </a>
     """
 
+CAMPOS_VALORES_VISUAIS = {
+    "Tipo de Contrato": "Classificação",
+    "Empresa do Grupo SBF": "Contratante",
+    "CNPJ Empresa do Grupo": "CNPJ interno",
+    "Local de Prestação Contraparte": "Local de execução",
+    "Contraparte": "Fornecedor",
+    "CNPJ Contraparte": "CNPJ fornecedor",
+    "Objetivo": "Finalidade",
+    "Descrição do Serviço/ Material": "Escopo",
+    "Descrição breve do cadastro": "Cadastro",
+    "Forma de pagamento": "Pagamento",
+    "Condição de Pagamento em Dias": "Prazo",
+    "Multa": "Penalidade",
+    "Vigência após a data de assinatura": "Vigência",
+    "Período de Vigência": "Período",
+    "Rescisão e Indenização": "Encerramento",
+    "Anticorrupção": "Compliance",
+    "Proteção de Dados LGPD": "LGPD",
+    "Data da Assinatura": "Assinatura",
+    "Data do Contrato": "Instrumento",
+    "Data Conclusão DocuSign": "DocuSign",
+    "Valor do Contrato Original": "Valor global",
+    "Valor Mensal Estimado": "Mensal / variável",
+    "Valor Total Estimado da Vigência": "Projeção da vigência",
+    "Valor Total dos Materiais e Serviços": "Soma dos itens",
+    "Pessoas que assinaram": "Signatários",
+}
+
+
+def _extrair_primeiro_valor_card(texto: Any) -> str:
+    txt = clean_text(texto)
+
+    m = re.search(
+        r"R\$\s*[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|R\$\s*[0-9]+(?:,[0-9]{2})?|R\$\s*[0-9]+(?:\.[0-9]{2})?",
+        txt,
+        flags=re.IGNORECASE,
+    )
+
+    if m:
+        return _formatar_valor_monetario_item(m.group(0))
+
+    return ""
+
+
+def _montar_partes_card_valor(label: str, value: Any) -> tuple[str, str, str]:
+    txt = clean_text(value)
+    low = txt.lower()
+
+    alerta = CAMPOS_VALORES_VISUAIS.get(label, "Informação")
+
+    if txt in ("", "Não localizado", "Não localizada", "Não identificado", "N/A", "None"):
+        return (
+            "Não identificado",
+            "Não foi localizada informação suficiente nos documentos analisados.",
+            alerta,
+        )
+
+    # Campos de data
+    if label in ("Data da Assinatura", "Data do Contrato", "Data Conclusão DocuSign"):
+        return (
+            txt,
+            "Data identificada conforme documentos analisados.",
+            alerta,
+        )
+
+    # Campos de CNPJ
+    if "CNPJ" in label:
+        return (
+            txt,
+            "Cadastro identificado nos documentos analisados.",
+            alerta,
+        )
+
+    # Campo de assinantes
+    if label == "Pessoas que assinaram":
+        nomes = [n.strip() for n in re.split(r";|,", txt) if n.strip()]
+        if len(nomes) >= 4:
+            principal = f"{len(nomes)} signatários identificados"
+            detalhe = "; ".join(nomes[:4]) + f"; e mais {len(nomes) - 4} nome(s)."
+            return principal, detalhe, alerta
+
+        return (
+            "Signatários identificados",
+            txt,
+            alerta,
+        )
+
+    # Campo sem valor global
+    if "sem valor global fixo" in low:
+        valor_ref = _extrair_primeiro_valor_card(txt)
+        detalhe = (
+            "O contrato não apresenta valor total fechado para todo o contrato. "
+            "Há valores unitários, mensais, por demanda ou referência comercial localizada."
+        )
+        if valor_ref:
+            detalhe += f" Referência localizada: {valor_ref}."
+        return "Sem valor global fixo", detalhe, "Não confundir com valor global"
+
+    # Campo não calculável
+    if "não calculável" in low or "nao calculavel" in low:
+        return (
+            "Não calculável com precisão",
+            "Faltam informações como quantidade, volume ou demanda para projetar o valor total da vigência. A fórmula depende de valor unitário x quantidade x prazo.",
+            alerta,
+        )
+
+    # Campo não aplicável
+    if low.startswith("não aplicável") or low.startswith("nao aplicavel"):
+        detalhe = txt
+        if len(detalhe) > 180:
+            detalhe = detalhe[:180].rsplit(" ", 1)[0] + "..."
+        return "Não aplicável", detalhe, alerta
+
+    # Campos com valor monetário
+    valor = _extrair_primeiro_valor_card(txt)
+
+    if label == "Valor Total dos Materiais e Serviços" and valor:
+        return (
+            valor,
+            "Soma dos itens identificados nos documentos analisados. O detalhamento completo fica na tabela de materiais e serviços.",
+            "Soma da tabela",
+        )
+
+    if label == "Valor Mensal Estimado" and valor:
+        unidade = _extrair_unidade_demanda(txt)
+        if _parece_valor_unitario_ou_demanda(txt):
+            detalhe = (
+                f"O valor mensal varia conforme a quantidade contratada/utilizada. "
+                f"Exemplo: 1 {unidade} = {valor}/mês; 10 unidades = valor multiplicado por 10."
+            )
+            return f"{valor} por {unidade}/mês", detalhe, "Valor variável"
+
+        return f"{valor}/mês", "Valor mensal estimado conforme informação localizada nos documentos.", alerta
+
+    if label == "Valor Total Estimado da Vigência" and valor:
+        detalhe = "Valor projetado para a vigência conforme informações localizadas nos documentos."
+        if "cálculo" in low or "calculo" in low:
+            detalhe = "Valor estimado com base no prazo de vigência e nas informações comerciais identificadas."
+        return valor, detalhe, alerta
+
+    if label == "Valor do Contrato Original" and valor:
+        return (
+            valor,
+            "Valor global previsto para execução do objeto contratado, quando expressamente definido nos documentos.",
+            alerta,
+        )
+
+    # Campos comuns: divide o texto em título principal + detalhe
+    partes = re.split(r"(?<=[.!?])\s+", txt)
+    principal = partes[0].strip() if partes else txt
+    detalhe = " ".join(partes[1:]).strip() if len(partes) > 1 else ""
+
+    if len(principal) > 95:
+        principal = principal[:95].rsplit(" ", 1)[0] + "..."
+
+    if not detalhe and len(txt) > len(principal):
+        detalhe = txt.replace(principal.replace("...", ""), "").strip(" .-")
+
+    if len(detalhe) > 220:
+        detalhe = detalhe[:220].rsplit(" ", 1)[0] + "..."
+
+    return principal, detalhe, alerta
+
+
 def render_info_card(label: str, value: Any) -> str:
-    return f'<div class="info-card"><small>{safe(label)}</small><p>{safe(value)}</p></div>'
+    principal, detalhe, alerta = _montar_partes_card_valor(label, value)
+
+    detalhe_html = ""
+    if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
+        detalhe_html = f'<div class="valor-detalhe">{safe(detalhe)}</div>'
+
+    return (
+        '<div class="valor-card">'
+        f'<div class="valor-titulo">{safe(label)}</div>'
+        f'<div class="valor-principal">{safe(principal)}</div>'
+        f'{detalhe_html}'
+        f'<div class="valor-alerta">{safe(alerta)}</div>'
+        '</div>'
+    )
 
 
 def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e serviços identificados") -> None:
