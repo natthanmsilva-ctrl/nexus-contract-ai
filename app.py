@@ -86,6 +86,7 @@ CAMPOS_OFICIAIS = [
     ("Valor do Contrato Original", "valor_contrato_original"),
     ("Valor Mensal Estimado", "valor_mensal_estimado"),
     ("Valor Total Estimado da Vigência", "valor_total_estimado_vigencia"),
+    ("Valor Total dos Materiais e Serviços", "valor_total_materiais_servicos"),
     ("Pessoas que assinaram", "pessoas_que_assinaram"),
 ]
 
@@ -327,6 +328,7 @@ section[data-testid="stSidebar"] *{
     margin:10px 0 0;
     line-height:1.45;
     overflow-wrap:anywhere;
+    white-space:pre-line;
 }
 
 .flow-grid{
@@ -1331,6 +1333,9 @@ def local_extract(texto: str) -> Dict[str, Any]:
         "prazo_contrato_dias": "Não localizado",
         "data_assinatura_aditivo": "Não localizado",
         "valor_contrato_original": valor_total,
+        "valor_mensal_estimado": "Não localizado",
+        "valor_total_estimado_vigencia": "Não localizado",
+        "valor_total_materiais_servicos": "Não identificado",
         "aditivo_escopo": "Não localizado",
         "aditivo_quitacao": "Não localizado",
         "aditivo_valor": "Não localizado",
@@ -1415,6 +1420,7 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Valor do Contrato Original = valor_contrato_original
 - Valor Mensal Estimado = valor_mensal_estimado
 - Valor Total Estimado da Vigência = valor_total_estimado_vigencia
+- Valor Total dos Materiais e Serviços = valor_total_materiais_servicos
 - Pessoas que assinaram = pessoas_que_assinaram
 
 TABELA DE ITENS OBRIGATÓRIA
@@ -1449,14 +1455,10 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 7. descricao_breve_cadastro deve ser curta e própria para cadastro de material/serviço. Exemplo: "Fornecimento e instalação de baterias para nobreaks".
 8. condicao_pagamento_dias deve retornar em formato claro, exemplo: "90 dias". Não retorne apenas número solto.
 9. forma_pagamento deve informar a forma descrita no contrato, exemplo: "Mediante emissão de nota fiscal".
-10. valor_contrato_original deve ser o valor comercial base do contrato/proposta. Em contratos recorrentes, mensais ou por consumo estimado, NÃO multiplique pela vigência; use o valor mensal/recorrente como valor_contrato_original.
-11. valor_mensal_estimado deve ser preenchido quando houver tabela mensal, consumo mensal, quantidade mensal ou "valor mensal estimado". Exemplo: R$ 39.200,00 mensais estimados.
-12. valor_total_estimado_vigencia deve ser preenchido somente quando houver cálculo de valor mensal x prazo. Se for cálculo seu, escreva como estimado, exemplo: R$ 1.411.200,00 (estimado para 36 meses).
-13. Se houver mais de um valor monetário, priorize nesta ordem:
-    a) valor mensal/recorrente ou comercial base apresentado na proposta;
-    b) valor total explícito do contrato, se o contrato realmente trouxer total fechado;
-    c) soma dos itens da proposta mensal;
-    d) cálculo estimado da vigência apenas no campo valor_total_estimado_vigencia.
+10. valor_contrato_original deve ser preenchido SOMENTE quando houver valor global fechado expressamente definido para todo o contrato. Não use valor unitário, valor por pessoa, valor por item, valor mensal, taxa, consumo estimado ou valor por demanda como valor original do contrato. Se não houver valor global fixo, retorne: "Sem valor global fixo definido no contrato. O documento apresenta valores unitários, mensais ou por demanda, mas não informa um valor total fechado para todo o contrato."
+11. valor_mensal_estimado deve explicar se o valor mensal é fixo ou variável. Se houver valor por unidade/pessoa/aprendiz/item/serviço, explique que o valor mensal depende da quantidade contratada ou utilizada. Exemplo: "R$ 282,42 por aprendiz ativo/mês. O valor mensal não é fixo; varia conforme a quantidade de aprendizes ativos no período."
+12. valor_total_estimado_vigencia deve ser calculado somente quando houver informações suficientes: valor mensal, quantidade/volume aplicável e prazo de vigência. Se faltar quantidade ou volume, não invente valor. Retorne explicação clara e a fórmula, exemplo: "Não calculável com precisão. Para calcular, é necessário aplicar: valor unitário x quantidade x quantidade de meses."
+13. valor_total_materiais_servicos deve trazer a soma da coluna valor_total dos itens em itens_contrato. Esse campo representa apenas a soma dos materiais/serviços identificados, não necessariamente o valor global do contrato. Se não houver itens com valor total, retorne "Não identificado".
 14. vigencia_apos_assinatura deve manter a redação objetiva do contrato, exemplo: "36 meses a partir da assinatura" ou "Prazo indeterminado".
 15. data_contrato deve ser a data textual do instrumento, exemplo "São Paulo, 21 de maio de 2026".
 16. data_conclusao_docusign deve ser a data do Certificate of Completion / Completed do DocuSign.
@@ -1480,7 +1482,7 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 28. Vigência deve explicar prazo e início/encerramento de forma objetiva.
 29. Forma de pagamento deve explicar o gatilho do pagamento, por exemplo: emissão/aprovação de nota fiscal, aceite, medição ou conclusão do serviço.
 30. Descrição breve do cadastro deve ser uma frase própria para cadastro de serviço/material, sem copiar histórico societário ou qualificação jurídica.
-31. valor_contrato_original deve estar formatado em reais, exemplo: "R$ 43.468,16".
+31. valor_contrato_original deve estar formatado em reais somente quando houver valor global fechado. Quando não houver valor global, explique profissionalmente que o contrato é por demanda, mensal, unitário ou sem valor global fixo definido.
 32. itens_contrato deve trazer todos os materiais e serviços unitários encontrados no contrato, anexos, propostas ou orçamentos.
 33. descricao deve ser o nome do material/serviço, sem copiar cláusulas longas.
 34. valor_unitario deve ser o preço unitário do item. Se não houver preço unitário monetário claro, retorne "Não aplicável" ou "Não localizado".
@@ -1509,7 +1511,7 @@ EXEMPLOS DE NÍVEL DE DETALHE ESPERADO
 - protecao_dados_lgpd: "Há cláusula de proteção de dados pessoais, com obrigações de segurança, confidencialidade e conformidade com a LGPD."
 
 VALIDAÇÃO FINAL OBRIGATÓRIA ANTES DE RESPONDER
-- Se identificar tabela de valores mensal e vigência em meses, separe valor mensal de valor total estimado da vigência.
+- Se identificar tabela de valores mensal e vigência em meses, separe valor mensal de valor total estimado da vigência. Nunca coloque valor unitário ou valor mensal no campo de valor global do contrato.
 - Se identificar Certificate of Completion / Status Completed do DocuSign, contrato_assinado = "Sim", status não deve ser "Pendente de assinatura" e pessoas_que_assinaram deve listar os signatários.
 - Se identificar PDF assinado e minutas DOCX sem assinatura, prevalece o PDF assinado.
 - Para contratos de alimentação/refeição, itens como Desjejum, Almoço e Café da Tarde devem aparecer em itens_contrato com quantidade, unidade, valor unitário e valor total.
@@ -1959,13 +1961,29 @@ def _extrair_assinantes_docusign(texto: str) -> list[str]:
 
 
 def _parse_moeda_brasil(valor: Any) -> float | None:
+    """Converte valores monetários em float, aceitando BR (1.087,85) e decimal (1087.85)."""
     txt = str(clean_text(valor))
     if not _valor_informado(txt):
         return None
-    m = re.search(r"(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|[0-9]+(?:,[0-9]{2})?)", txt)
+    m = re.search(r"(?:R\$\s*)?([0-9]{1,3}(?:[\.,][0-9]{3})*(?:[\.,][0-9]{2})|[0-9]+(?:[\.,][0-9]{2})?)", txt)
     if not m:
         return None
-    num = m.group(1).replace(".", "").replace(",", ".")
+    num = m.group(1).strip()
+
+    if "," in num and "." in num:
+        # Formato brasileiro: 1.087,85
+        num = num.replace(".", "").replace(",", ".")
+    elif "," in num:
+        # Formato brasileiro sem milhar: 1087,85
+        num = num.replace(".", "").replace(",", ".")
+    elif "." in num:
+        partes = num.split(".")
+        if len(partes[-1]) == 2:
+            # Decimal internacional: 1087.85 / 848.35
+            num = "".join(partes[:-1]) + "." + partes[-1] if len(partes) > 2 else num
+        else:
+            # Milhar sem decimal: 1.087
+            num = num.replace(".", "")
     try:
         return float(num)
     except Exception:
@@ -2024,6 +2042,206 @@ def _extrair_total_mensal_texto(texto: str) -> float | None:
     return None
 
 
+
+def _parece_valor_unitario_ou_demanda(valor: Any) -> bool:
+    """Identifica valores que não são globais: por pessoa, item, mês, demanda etc."""
+    txt = clean_text(valor).lower()
+    if not _valor_informado(txt):
+        return False
+    termos = [
+        " por ", "/mês", "/mes", "mês", "mes", "mensal", "mensais",
+        "unitário", "unitario", "unidade", "item", "serviço", "servico",
+        "aprendiz", "ativo", "demanda", "consumo", "utilizada", "utilizado",
+        "contratada", "contratado", "quantidade", "recorrente", "estimado", "estimada",
+    ]
+    return any(t in txt for t in termos)
+
+
+def _texto_sem_valor_global(referencia: Any = "") -> str:
+    txt = "Sem valor global fixo definido no contrato. O documento apresenta valores unitários, mensais ou por demanda, mas não informa um valor total fechado para todo o contrato."
+    ref = clean_text(referencia)
+    if _valor_informado(ref) and ref not in txt:
+        txt += f" Referência comercial localizada: {ref}."
+    return txt
+
+
+def _extrair_unidade_demanda(valor: Any) -> str:
+    txt = clean_text(valor)
+    m = re.search(r"por\s+([^.;,\n/]+)", txt, flags=re.IGNORECASE)
+    if m:
+        unidade = clean_text(m.group(1)).strip(" -")
+        unidade = re.sub(r"\s*(ao|por)?\s*m[eê]s$", "", unidade, flags=re.IGNORECASE).strip()
+        if unidade:
+            return unidade
+    low = txt.lower()
+    if "aprendiz" in low:
+        return "aprendiz ativo"
+    if "colaborador" in low:
+        return "colaborador"
+    if "usuário" in low or "usuario" in low:
+        return "usuário"
+    if "item" in low:
+        return "item"
+    return "unidade contratada"
+
+
+def _label_qtd_unidade(qtd: int, unidade: str) -> str:
+    unidade = clean_text(unidade).lower()
+    if "aprendiz" in unidade:
+        return f"{qtd} aprendiz ativo" if qtd == 1 else f"{qtd} aprendizes ativos"
+    if "colaborador" in unidade:
+        return f"{qtd} colaborador" if qtd == 1 else f"{qtd} colaboradores"
+    if "usu" in unidade:
+        return f"{qtd} usuário" if qtd == 1 else f"{qtd} usuários"
+    if qtd == 1:
+        return f"1 {unidade}"
+    return f"{qtd} unidades"
+
+
+def _formatar_valor_monetario_item(valor: Any) -> str:
+    txt = clean_text(valor)
+    v = _parse_moeda_brasil(txt)
+    if v is None:
+        return txt
+    return _formatar_moeda_brasil(v)
+
+
+def _montar_total_materiais_servicos(itens: List[Dict[str, Any]], total: float | None) -> str:
+    if total is None or total <= 0:
+        return "Não identificado. Não foram localizados itens com valor total suficiente para somar materiais e serviços."
+
+    detalhes = []
+    for item in itens[:8]:
+        desc = clean_text(item.get("Descrição") or item.get("descricao"))
+        valor = _parse_moeda_brasil(item.get("Valor total") or item.get("valor_total"))
+        if desc and valor is not None:
+            detalhes.append(f"{desc}: {_formatar_moeda_brasil(valor)}")
+
+    texto = f"{_formatar_moeda_brasil(total)}. Soma dos valores totais dos materiais e serviços identificados nos documentos analisados."
+    if detalhes:
+        texto += " Itens considerados: " + "; ".join(detalhes)
+        if len(itens) > 8:
+            texto += f"; e mais {len(itens) - 8} item(ns)."
+        else:
+            texto += "."
+    texto += " Esse campo não representa necessariamente o valor global do contrato; representa a soma dos itens identificados."
+    return texto
+
+
+def _formatar_valor_mensal_profissional(valor: Any, mensal_detectado: float | None = None, origem_itens: bool = False) -> str:
+    txt = clean_text(valor)
+    v = _parse_moeda_brasil(txt)
+    if v is None and mensal_detectado:
+        v = mensal_detectado
+
+    if _valor_informado(txt) and _parece_valor_unitario_ou_demanda(txt):
+        unidade = _extrair_unidade_demanda(txt)
+        if v is not None:
+            e1 = _formatar_moeda_brasil(v)
+            e10 = _formatar_moeda_brasil(v * 10)
+            e100 = _formatar_moeda_brasil(v * 100)
+            return (
+                f"{_formatar_moeda_brasil(v)} por {unidade}/mês. "
+                "O valor mensal não é fixo; ele varia conforme a quantidade contratada ou utilizada no período. "
+                f"Exemplo de cálculo: {_label_qtd_unidade(1, unidade)} = {e1}/mês; "
+                f"{_label_qtd_unidade(10, unidade)} = {e10}/mês; "
+                f"{_label_qtd_unidade(100, unidade)} = {e100}/mês."
+            )
+        return "Valor mensal variável conforme demanda ou quantidade contratada. O contrato não apresenta um valor mensal fixo; apresenta critérios unitários para cálculo."
+
+    if v is not None and origem_itens:
+        return (
+            f"{_formatar_moeda_brasil(v)}/mês, quando os itens identificados representarem cobrança mensal recorrente. "
+            "A periodicidade deve ser validada no contrato/proposta, pois o valor foi obtido pela soma dos itens com valor total localizado."
+        )
+
+    if v is not None:
+        return f"{_formatar_moeda_brasil(v)}/mês. Valor mensal estimado informado nos documentos analisados."
+
+    if _valor_informado(txt):
+        return txt
+
+    return "Não localizado. Não foi identificado valor mensal fixo ou variável com clareza nos documentos analisados."
+
+
+def _formatar_valor_total_vigencia_profissional(base: Dict[str, Any], meses: int | None, mensal_num: float | None) -> str:
+    atual_txt = clean_text(base.get("valor_total_estimado_vigencia"))
+    mensal_txt = clean_text(base.get("valor_mensal_estimado"))
+    mensal_variavel = _parece_valor_unitario_ou_demanda(mensal_txt)
+
+    if mensal_variavel:
+        unidade = _extrair_unidade_demanda(mensal_txt)
+        valor_unit = _parse_moeda_brasil(mensal_txt)
+        if valor_unit is not None and meses:
+            return (
+                "Não calculável com precisão. "
+                f"O contrato possui valor unitário de {_formatar_moeda_brasil(valor_unit)} por {unidade}/mês, "
+                f"porém não informa a quantidade total de {unidade}(s) durante os {meses} meses de vigência. "
+                "Para calcular, é necessário aplicar: valor unitário x quantidade contratada/utilizada x quantidade de meses."
+            )
+        return (
+            "Não calculável com precisão. O valor é variável conforme demanda, quantidade utilizada ou quantidade contratada. "
+            "Para calcular, é necessário aplicar: valor unitário x quantidade x quantidade de meses."
+        )
+
+    atual_num = _parse_moeda_brasil(atual_txt)
+    if atual_num is not None and _valor_informado(atual_txt):
+        if mensal_num and meses:
+            return f"{_formatar_moeda_brasil(atual_num)}. Cálculo estimado com base em {_formatar_moeda_brasil(mensal_num)}/mês x {meses} meses de vigência."
+        return f"{_formatar_moeda_brasil(atual_num)}. Valor total estimado para a vigência conforme informações localizadas nos documentos."
+
+    if mensal_num and meses:
+        total = mensal_num * meses
+        return f"{_formatar_moeda_brasil(total)}. Cálculo estimado com base em {_formatar_moeda_brasil(mensal_num)}/mês x {meses} meses de vigência."
+
+    if _valor_informado(atual_txt):
+        return atual_txt
+
+    return "Não calculável com precisão. Os documentos não apresentam informações suficientes para projetar o valor total da vigência."
+
+
+def aplicar_regras_valores_profissionais(base: Dict[str, Any], itens: List[Dict[str, Any]], texto: str, meses: int | None) -> Dict[str, Any]:
+    """Padroniza os 4 campos de valores para evitar confusão entre global, mensal, vigência e itens."""
+    total_itens = _somar_valores_itens(itens)
+    base["valor_total_materiais_servicos"] = _montar_total_materiais_servicos(itens, total_itens)
+
+    valor_original = clean_text(base.get("valor_contrato_original") or base.get("valor_total"))
+    valor_mensal_original = clean_text(base.get("valor_mensal_estimado"))
+    original_num = _parse_moeda_brasil(valor_original)
+    mensal_num_existente = _parse_moeda_brasil(valor_mensal_original)
+
+    original_igual_mensal_variavel = (
+        original_num is not None
+        and mensal_num_existente is not None
+        and abs(original_num - mensal_num_existente) < 0.01
+        and _parece_valor_unitario_ou_demanda(valor_mensal_original)
+    )
+
+    if not _valor_informado(valor_original):
+        base["valor_contrato_original"] = _texto_sem_valor_global()
+    elif _parece_valor_unitario_ou_demanda(valor_original) or original_igual_mensal_variavel:
+        base["valor_contrato_original"] = _texto_sem_valor_global(valor_original)
+    elif original_num is not None:
+        base["valor_contrato_original"] = f"{_formatar_moeda_brasil(original_num)}. Valor global previsto no contrato para execução do objeto contratado, conforme informação localizada nos documentos."
+    else:
+        base["valor_contrato_original"] = valor_original
+
+    # Valor mensal: prioriza o que a IA encontrou; se vazio, usa soma dos itens apenas como apoio.
+    if _valor_informado(valor_mensal_original):
+        base["valor_mensal_estimado"] = _formatar_valor_mensal_profissional(valor_mensal_original)
+    elif total_itens:
+        base["valor_mensal_estimado"] = _formatar_valor_mensal_profissional("", total_itens, origem_itens=True)
+    else:
+        mensal_texto = _extrair_total_mensal_texto(texto)
+        base["valor_mensal_estimado"] = _formatar_valor_mensal_profissional("", mensal_texto, origem_itens=False)
+
+    mensal_num = _parse_moeda_brasil(base.get("valor_mensal_estimado"))
+    base["valor_total_estimado_vigencia"] = _formatar_valor_total_vigencia_profissional(base, meses, mensal_num)
+
+    # Mantém compatibilidade com histórico antigo, mas sem confundir valor global com total de itens.
+    base["valor_total"] = base.get("valor_contrato_original")
+    return base
+
 def aplicar_regras_finais_contrato(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
     """Blindagem final contra confusão de minuta, valor mensal x vigência e assinatura DocuSign."""
     texto = str(texto or "")
@@ -2069,22 +2287,8 @@ def aplicar_regras_finais_contrato(base: Dict[str, Any], texto: str) -> Dict[str
         base["checklist"] = checklist
 
     itens = normalizar_itens_contrato(base.get("itens_contrato", []))
-    mensal = _somar_valores_itens(itens) or _extrair_total_mensal_texto(texto)
     meses = _extrair_meses_vigencia(texto, base)
-    atual = _parse_moeda_brasil(base.get("valor_contrato_original") or base.get("valor_total"))
-
-    if mensal:
-        base["valor_mensal_estimado"] = _formatar_moeda_brasil(mensal, "mensais estimados")
-        # Se o valor original estiver igual ao valor da vigência, volta o valor original para o mensal.
-        if meses and atual and abs(atual - (mensal * meses)) <= max(10.0, mensal * 0.01):
-            base["valor_total_estimado_vigencia"] = _formatar_moeda_brasil(atual, f"(estimado para {meses} meses)")
-            base["valor_contrato_original"] = _formatar_moeda_brasil(mensal, "mensais estimados")
-            base["valor_total"] = base["valor_contrato_original"]
-        elif meses:
-            base.setdefault("valor_total_estimado_vigencia", _formatar_moeda_brasil(mensal * meses, f"(estimado para {meses} meses)"))
-            if not atual or (atual and atual > mensal * 3):
-                base["valor_contrato_original"] = _formatar_moeda_brasil(mensal, "mensais estimados")
-                base["valor_total"] = base["valor_contrato_original"]
+    base = aplicar_regras_valores_profissionais(base, itens, texto, meses)
 
     return base
 
@@ -2113,6 +2317,10 @@ def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
         "anticorrupcao": 300,
         "protecao_dados_lgpd": 320,
         "alerta_assinatura": 220,
+        "valor_contrato_original": 420,
+        "valor_mensal_estimado": 520,
+        "valor_total_estimado_vigencia": 520,
+        "valor_total_materiais_servicos": 650,
     }
     for campo, limite in limites.items():
         base[campo] = resumir_campo(base.get(campo), limite)
@@ -2149,6 +2357,10 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         "valor_mensal_estimado": "valor_mensal_estimado",
         "valor_total_da_vigencia": "valor_total_estimado_vigencia",
         "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
+        "valor_total_materiais_servicos": "valor_total_materiais_servicos",
+        "valor_total_dos_materiais_e_servicos": "valor_total_materiais_servicos",
+        "valor_total_dos_materiais_servicos": "valor_total_materiais_servicos",
+        "soma_itens_contrato": "valor_total_materiais_servicos",
         "data_do_contrato": "data_contrato",
         "data_conclusao_docusign": "data_conclusao_docusign",
         "data_de_conclusao_docusign": "data_conclusao_docusign",
@@ -2729,7 +2941,7 @@ def _preparar_historico_excel(df: pd.DataFrame) -> pd.DataFrame:
     """Padroniza colunas do histórico para exportação executiva."""
     colunas = [
         "ID", "Data da análise", "Contraparte", "CNPJ", "Valor total",
-        "Valor mensal estimado", "Valor total estimado da vigência",
+        "Valor mensal estimado", "Valor total estimado da vigência", "Valor total dos materiais e serviços",
         "Data do contrato", "Data conclusão DocuSign", "Pessoas que assinaram",
         "Vigência", "Status", "Risco", "Score", "Assinado", "Modelo IA", "Origem", "Arquivos analisados",
     ]
@@ -4121,6 +4333,7 @@ if pagina == "📚 Histórico":
         campos_json_excel = {
             "valor_mensal_estimado": "valor_mensal_estimado",
             "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
+            "valor_total_materiais_servicos": "valor_total_materiais_servicos",
             "data_contrato": "data_contrato",
             "data_conclusao_docusign": "data_conclusao_docusign",
             "pessoas_que_assinaram": "pessoas_que_assinaram",
@@ -4131,7 +4344,7 @@ if pagina == "📚 Histórico":
 
     export_cols = [
         "id", "data_analise", "fornecedor", "cnpj", "valor_total",
-        "valor_mensal_estimado", "valor_total_estimado_vigencia",
+        "valor_mensal_estimado", "valor_total_estimado_vigencia", "valor_total_materiais_servicos",
         "data_contrato", "data_conclusao_docusign", "pessoas_que_assinaram",
         "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
     ]
@@ -4144,6 +4357,7 @@ if pagina == "📚 Histórico":
         "valor_total": "Valor total",
         "valor_mensal_estimado": "Valor mensal estimado",
         "valor_total_estimado_vigencia": "Valor total estimado da vigência",
+        "valor_total_materiais_servicos": "Valor total dos materiais e serviços",
         "data_contrato": "Data do contrato",
         "data_conclusao_docusign": "Data conclusão DocuSign",
         "pessoas_que_assinaram": "Pessoas que assinaram",
