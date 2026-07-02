@@ -620,6 +620,66 @@ div[data-testid="stVerticalBlockBorderWrapper"] label{
     }
 }
 
+
+/* Histórico: card executivo premium */
+.history-card-v2{
+    background:
+        radial-gradient(circle at top left, rgba(16,185,129,.13), transparent 30%),
+        linear-gradient(145deg, rgba(12,18,28,.98), rgba(4,10,16,.98));
+    border:1px solid rgba(215,191,117,.34);
+    border-radius:24px;
+    padding:0;
+    margin:12px 0 14px;
+    box-shadow:0 18px 48px rgba(0,0,0,.34);
+    position:relative;
+    overflow:hidden;
+}
+.history-card-v2::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,#d7bf75,#008f6b,#16a34a);}
+.history-hero-v3{display:grid;grid-template-columns:1fr auto;gap:20px;padding:24px 26px 18px;border-bottom:1px solid rgba(255,255,255,.08);}
+.history-title-v3{display:flex;gap:15px;align-items:flex-start;min-width:0;}
+.history-icon-v3{width:46px;height:46px;border-radius:16px;display:flex;align-items:center;justify-content:center;background:rgba(215,191,117,.12);border:1px solid rgba(215,191,117,.28);font-size:23px;box-shadow:inset 0 0 18px rgba(215,191,117,.08);flex:0 0 auto;}
+.history-title-v3 h3{margin:0 0 7px 0;color:#fff;font-size:26px;line-height:1.1;font-weight:950;letter-spacing:-.02em;}
+.history-sub-v3{color:#9ca3af;font-size:12px;font-weight:800;display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.history-risk-stack-v3{display:flex;flex-direction:column;gap:10px;align-items:flex-end;min-width:170px;}
+.history-risk-v2{min-width:145px;text-align:center;color:#fff;padding:11px 18px;border-radius:999px;font-weight:950;font-size:12px;letter-spacing:.06em;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16),0 10px 26px rgba(0,0,0,.18);}
+.history-score-v3{display:flex;gap:8px;align-items:center;color:#d7bf75;font-size:12px;font-weight:900;background:rgba(255,255,255,.045);border:1px solid rgba(215,191,117,.18);padding:7px 10px;border-radius:999px;}
+.history-score-v3 strong{color:#fff;font-size:16px;}
+.history-body-v3{padding:18px 26px 22px;}
+.history-chip-row-v2{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px 0;}
+.history-chip-v2{display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.045);border:1px solid rgba(215,191,117,.18);color:#d1d5db;font-size:12px;font-weight:850;}
+.history-chip-v2.ok{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.26);color:#ecfdf5;}
+.history-chip-v2.warn{background:rgba(215,191,117,.10);border-color:rgba(215,191,117,.25);color:#fff7d6;}
+.history-main-grid-v3{display:grid;grid-template-columns:1fr 1.2fr .72fr .68fr;gap:12px;margin:12px 0;}
+.history-kpi-v2{background:rgba(255,255,255,.038);border:1px solid rgba(215,191,117,.16);border-radius:17px;padding:14px 15px;min-height:88px;}
+.history-kpi-v2 small,.history-box-v2 small{display:block;color:#d7bf75;font-weight:950;font-size:10px;text-transform:uppercase;letter-spacing:.09em;margin-bottom:8px;}
+.history-kpi-v2 strong{color:#fff;display:block;font-size:15px;line-height:1.32;font-weight:950;}
+.history-kpi-v2 p{margin:0;color:#dbe4ee;font-size:13px;line-height:1.38;font-weight:750;}
+.history-value-v3 strong{font-size:18px;}
+.history-wide-v2{display:grid;grid-template-columns:1.35fr 1fr;gap:12px;margin-top:12px;}
+.history-box-v2{background:linear-gradient(145deg,rgba(0,72,55,.24),rgba(8,17,25,.38));border:1px solid rgba(16,185,129,.20);border-radius:18px;padding:15px 16px;min-height:116px;}
+.history-box-v2 p{margin:0;color:#f8fafc;font-size:13px;line-height:1.45;font-weight:760;}
+.history-mini-dashboard-v3{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.history-mini-v3{border-radius:14px;padding:11px 10px;background:rgba(255,255,255,.045);border:1px solid rgba(215,191,117,.14);}
+.history-mini-v3 small{margin:0 0 5px 0;}
+.history-mini-v3 strong{color:#fff;font-size:21px;font-weight:950;line-height:1;}
+.history-mini-v3 span{display:block;color:#9ca3af;font-size:10px;font-weight:850;margin-top:6px;}
+.history-summary-v3{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px;}
+.history-insight-v3{border:1px solid rgba(215,191,117,.14);background:rgba(255,255,255,.032);border-radius:15px;padding:12px;}
+.history-insight-v3 small{display:block;color:#d7bf75;font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:950;margin-bottom:6px;}
+.history-insight-v3 strong{color:#fff;font-size:18px;font-weight:950;}
+.history-insight-v3 p{margin:4px 0 0 0;color:#aeb8c4;font-size:11px;font-weight:750;line-height:1.25;}
+.history-docline-v3{margin-top:14px;padding:12px 13px;border-radius:16px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between;gap:12px;align-items:center;color:#aeb8c4;font-size:12px;font-weight:800;}
+.history-docline-v3 b{color:#f8fafc;}
+.history-footer-v2{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);color:#9ca3af;font-size:12px;font-weight:750;}
+.history-actions-v4{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);color:#9ca3af;font-size:12px;font-weight:750;}
+.history-action-note-v4{color:#aeb8c4;font-weight:800;}
+.history-excel-link-v4{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:190px;padding:11px 18px;border-radius:13px;background:#004d3d;border:1px solid #d7bf75;color:#fff !important;text-decoration:none !important;font-weight:950;box-shadow:0 10px 24px rgba(0,0,0,.18);}
+.history-excel-link-v4:hover{filter:brightness(1.12);transform:translateY(-1px);}
+.history-card-v2 code,.history-card-v2 pre{background:transparent!important;color:inherit!important;}
+@media(max-width:1250px){.history-main-grid-v3{grid-template-columns:1fr 1fr;}.history-wide-v2{grid-template-columns:1fr;}.history-summary-v3{grid-template-columns:1fr 1fr;}}
+@media(max-width:760px){.history-hero-v3{grid-template-columns:1fr;}.history-risk-stack-v3{align-items:flex-start;}.history-main-grid-v3,.history-summary-v3{grid-template-columns:1fr;}.history-mini-dashboard-v3{grid-template-columns:1fr 1fr;}}
+
+
 .valor-card{
     background:linear-gradient(145deg,#101821,#0b1118);
     border:1px solid rgba(215,191,117,.30);
@@ -6200,6 +6260,182 @@ def render_contract_card(row: pd.Series) -> None:
 
 
 
+
+def _hist_parse_resultado_json(row: pd.Series) -> Dict[str, Any]:
+    raw = row.get("resultado_json") if "resultado_json" in row.index else None
+    if raw not in (None, "", "Não informado"):
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _hist_texto_curto(valor: Any, limite: int = 190) -> str:
+    txt = clean_text(valor)
+    if txt in ("", "Não localizado", "None", "nan"):
+        return "Não localizado"
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if len(txt) <= limite:
+        return txt
+    frases = re.split(r"(?<=[.!?])\s+", txt)
+    if frases and 35 <= len(frases[0]) <= limite:
+        return frases[0]
+    return txt[:limite].rsplit(" ", 1)[0]
+
+
+def _hist_valor_resumo(row: pd.Series, resultado: Dict[str, Any]) -> str:
+    candidatos = [resultado.get("valor_contrato_original"), resultado.get("valor_total"), row.get("valor_total") if "valor_total" in row.index else None]
+    for valor in candidatos:
+        txt = clean_text(valor)
+        low = txt.lower()
+        if "sem valor global fixo" in low:
+            return "Sem valor global fixo"
+        if "não calculável" in low or "nao calculavel" in low:
+            return "Não calculável com precisão"
+        if txt not in ("", "Não localizado", "None", "nan"):
+            return _hist_texto_curto(txt, 150)
+    return "Não localizado"
+
+
+def _hist_split_arquivos(valor: Any) -> List[str]:
+    txt = clean_text(valor)
+    if txt in ("", "Não localizado", "None", "nan"):
+        return []
+    partes = re.split(r"\s*\|\s*", txt)
+    return [p.strip() for p in partes if p.strip()]
+
+
+def _hist_resumo_processamento(resultado: Dict[str, Any], arquivos: List[str]) -> Dict[str, Any]:
+    resumo = resultado.get("resumo_processamento") if isinstance(resultado.get("resumo_processamento"), dict) else {}
+    triagem = resultado.get("triagem_anexos") if isinstance(resultado.get("triagem_anexos"), list) else []
+    if triagem:
+        total = len(triagem)
+        profunda = sum(1 for x in triagem if x.get("Decisão") == "Análise profunda")
+        apoio = sum(1 for x in triagem if str(x.get("Decisão", "")).startswith("Apoio"))
+        ignorados = sum(1 for x in triagem if "Ignorado" in str(x.get("Decisão", "")))
+    else:
+        total = resumo.get("total_arquivos") or len(arquivos)
+        profunda = resumo.get("analise_profunda") or "-"
+        apoio = resumo.get("apoio") or "-"
+        ignorados = resumo.get("ignorados") or "-"
+    return {"total": total, "analise_ia": profunda, "apoio": apoio, "ignorados": ignorados}
+
+
+def render_historico_card_executivo(row: pd.Series) -> str:
+    resultado = _hist_parse_resultado_json(row)
+
+    fornecedor = clean_text(row.get("fornecedor") or resultado.get("contraparte") or resultado.get("fornecedor"))
+    cnpj = clean_text(row.get("cnpj") or resultado.get("cnpj_contraparte") or resultado.get("cnpj"))
+    risco = normalize_risco(row.get("risco") or resultado.get("risco"))
+    cor = risco_cor(risco)
+    score = clean_text(row.get("score") or resultado.get("score"))
+    status = clean_text(row.get("status") or resultado.get("status"))
+    origem = clean_text(row.get("tipo_origem") or resultado.get("tipo_origem"))
+    modelo = clean_text(row.get("modelo_ia") or resultado.get("modelo_ia"))
+    assinado = clean_text(row.get("contrato_assinado") or resultado.get("contrato_assinado"))
+    data = clean_text(row.get("data_analise") or resultado.get("data_analise"))
+    id_reg = clean_text(row.get("id"))
+
+    vigencia = _hist_texto_curto(
+        row.get("vigencia") or resultado.get("periodo_vigencia") or resultado.get("vigencia_apos_assinatura") or resultado.get("vigencia"),
+        180,
+    )
+    valor = _hist_valor_resumo(row, resultado)
+    arquivos = _hist_split_arquivos(row.get("arquivo") or resultado.get("arquivos_analisados"))
+    qtd_arquivos = len(arquivos)
+    resumo_proc = _hist_resumo_processamento(resultado, arquivos)
+
+    aditivos = normalizar_aditivos_contrato(resultado.get("aditivos_contrato", [])) if isinstance(resultado, dict) else []
+    qtd_aditivos = len(aditivos)
+    aditivos_assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() == "SIM")
+    itens = normalizar_itens_contrato(resultado.get("itens_contrato", [])) if isinstance(resultado, dict) else []
+    qtd_itens = len(itens)
+    pendencias = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
+    qtd_pendencias = len(pendencias)
+
+    valor_principal = "Sem valor global fixo" if "sem valor global fixo" in valor.lower() else valor
+    parecer = _hist_texto_curto(resultado.get("parecer") or resultado.get("resumo_executivo") or "Use a análise completa para consultar o parecer detalhado.", 190)
+
+    total_proc = resumo_proc.get("total")
+    analise_ia = resumo_proc.get("analise_ia")
+    apoio = resumo_proc.get("apoio")
+    ignorados = resumo_proc.get("ignorados")
+
+    subtitulo = f"Análise ID {safe(id_reg)} • {safe(data)}"
+
+    try:
+        excel_bytes = gerar_excel_card_bytes(row)
+        excel_b64 = base64.b64encode(excel_bytes).decode("ascii")
+        excel_href = f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{excel_b64}"
+        excel_file = f"analise_contrato_{id_reg or 'historico'}.xlsx"
+        excel_html = f'<a class="history-excel-link-v4" href="{excel_href}" download="{safe(excel_file)}">📥 Baixar Excel</a>'
+    except Exception:
+        excel_html = '<span class="history-excel-link-v4">Excel indisponível</span>'
+
+    html_card = f"""
+<div class="history-card-v2">
+<div class="history-hero-v3">
+<div class="history-title-v3">
+<div class="history-icon-v3">📄</div>
+<div>
+<h3>{safe(fornecedor)}</h3>
+<div class="history-sub-v3">{subtitulo}</div>
+</div>
+</div>
+<div class="history-risk-stack-v3">
+<div class="history-risk-v2" style="background:{cor};">{safe(risco)}</div>
+<div class="history-score-v3">Score <strong>{safe(score)}</strong></div>
+</div>
+</div>
+<div class="history-body-v3">
+<div class="history-chip-row-v2">
+<span class="history-chip-v2 ok">✅ Assinado: {safe(assinado)}</span>
+<span class="history-chip-v2">📌 Origem: {safe(origem)}</span>
+<span class="history-chip-v2">🤖 Modelo: {safe(modelo)}</span>
+<span class="history-chip-v2 warn">📁 Anexos: {safe(qtd_arquivos)}</span>
+</div>
+<div class="history-main-grid-v3">
+<div class="history-kpi-v2"><small>CNPJ</small><strong>{safe(cnpj)}</strong></div>
+<div class="history-kpi-v2 history-value-v3"><small>Valor do contrato</small><strong>{safe(valor_principal)}</strong><p>Resumo financeiro consolidado da análise.</p></div>
+<div class="history-kpi-v2"><small>Status</small><strong>{safe(status)}</strong></div>
+<div class="history-kpi-v2"><small>Score</small><strong>{safe(score)}</strong></div>
+</div>
+<div class="history-wide-v2">
+<div class="history-box-v2">
+<small>Vigência / Período</small>
+<p>{safe(vigencia)}</p>
+</div>
+<div class="history-box-v2">
+<small>Pré-triagem dos anexos</small>
+<div class="history-mini-dashboard-v3">
+<div class="history-mini-v3"><small>Total</small><strong>{safe(total_proc)}</strong><span>arquivos</span></div>
+<div class="history-mini-v3"><small>Análise IA</small><strong>{safe(analise_ia)}</strong><span>profunda</span></div>
+<div class="history-mini-v3"><small>Apoio</small><strong>{safe(apoio)}</strong><span>contexto</span></div>
+<div class="history-mini-v3"><small>Ignorados</small><strong>{safe(ignorados)}</strong><span>duplicados</span></div>
+</div>
+</div>
+</div>
+<div class="history-summary-v3">
+<div class="history-insight-v3"><small>Aditivos</small><strong>{safe(qtd_aditivos)}</strong><p>{safe(aditivos_assinados)} assinado(s)</p></div>
+<div class="history-insight-v3"><small>Materiais/Serviços</small><strong>{safe(qtd_itens)}</strong><p>itens identificados</p></div>
+<div class="history-insight-v3"><small>Pendências</small><strong>{safe(qtd_pendencias)}</strong><p>pontos para revisar</p></div>
+<div class="history-insight-v3"><small>Modelo</small><strong>{safe(modelo)}</strong><p>motor utilizado</p></div>
+</div>
+<div class="history-docline-v3">
+<span><b>Resumo:</b> {safe(parecer)}</span>
+<span><b>Registro:</b> {safe(data)} • ID {safe(id_reg)}</span>
+</div>
+<div class="history-actions-v4">
+<div class="history-action-note-v4">Abra a análise completa abaixo para consultar aditivos, materiais, triagem, checklist e auditoria técnica.</div>
+{excel_html}
+</div>
+</div>
+</div>
+"""
+    return "\n".join(line.strip() for line in html_card.splitlines() if line.strip())
+
 def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], str]:
     """Recupera do histórico o JSON completo salvo na análise."""
     resultado: Dict[str, Any] = {}
@@ -7513,46 +7749,8 @@ if pagina == "📚 Histórico":
 
         with tab_cards:
             for _, row in filtrado.head(25).iterrows():
-                risco = normalize_risco(row.get("risco"))
-                cor = risco_cor(risco)
-                with st.container(border=True):
-                    topo1, topo2 = st.columns([5, 1])
-                    with topo1:
-                        st.markdown(f"### 📄 {safe(row.get('fornecedor'))}", unsafe_allow_html=True)
-                        st.caption(str(row.get("arquivo") or "Não informado"))
-                    with topo2:
-                        st.markdown(
-                            f"""
-                            <div style="text-align:center;background:{cor};color:white;
-                            padding:10px 14px;border-radius:999px;font-weight:900;font-size:12px;">
-                                {safe(risco)}
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-
-                    cc1, cc2, cc3, cc4 = st.columns([1.2, 1.1, 1.2, .8])
-                    cc1.markdown(f"**CNPJ**  \n{safe(row.get('cnpj'))}", unsafe_allow_html=True)
-                    cc2.markdown(f"**Valor**  \n{safe(row.get('valor_total'))}", unsafe_allow_html=True)
-                    cc3.markdown(f"**Status**  \n{safe(row.get('status'))}", unsafe_allow_html=True)
-                    cc4.markdown(f"**Score**  \n{safe(row.get('score'))}", unsafe_allow_html=True)
-
-                    cc5, cc6, cc7, cc8 = st.columns([1.4, 1, 1, 1])
-                    cc5.markdown(f"**Vigência**  \n{safe(row.get('vigencia'))}", unsafe_allow_html=True)
-                    cc6.markdown(f"**Assinado**  \n{safe(row.get('contrato_assinado'))}", unsafe_allow_html=True)
-                    cc7.markdown(f"**Origem**  \n{safe(row.get('tipo_origem'))}", unsafe_allow_html=True)
-                    cc8.markdown(f"**Modelo**  \n{safe(row.get('modelo_ia'))}", unsafe_allow_html=True)
-
-                    b1, b2 = st.columns([4, 1])
-                    b1.caption(f"Analisado em {row.get('data_analise') or 'Não informado'} • ID {row.get('id')}")
-                    b2.download_button(
-                        "📥 Excel",
-                        data=gerar_excel_card_bytes(row),
-                        file_name=f"analise_contrato_{row.get('id', 'historico')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key=f"download_historico_card_{row.get('id', id(row))}",
-                    )
+                with st.container():
+                    st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
 
                     with st.expander("🔎 Abrir análise completa deste contrato", expanded=False):
                         render_analise_completa_historico(row)
