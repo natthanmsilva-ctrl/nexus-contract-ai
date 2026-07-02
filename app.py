@@ -13,10 +13,16 @@ import html
 import base64
 import tempfile
 import time
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 from textwrap import dedent
+
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx
+except Exception:
+    add_script_run_ctx = None
 
 import pandas as pd
 import sqlite3
@@ -4237,6 +4243,8 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     checklist_lista = resultado.get("checklist", []) if isinstance(resultado.get("checklist"), list) else []
     itens_lista = normalizar_itens_contrato(resultado.get("itens_contrato", []))
     aditivos_lista = normalizar_aditivos_contrato(resultado.get("aditivos_contrato", []))
+    triagem_lista = resultado.get("triagem_anexos", []) if isinstance(resultado.get("triagem_anexos", []), list) else []
+    resumo_processamento = resultado.get("resumo_processamento", {}) if isinstance(resultado.get("resumo_processamento", {}), dict) else {}
 
     contraparte = v("contraparte", v("fornecedor"))
     cnpj_contraparte = v("cnpj_contraparte", v("cnpj"))
@@ -4285,6 +4293,11 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
         ("Resumo de Aditivos", v("resumo_aditivos")),
+        ("Arquivos enviados para Análise IA", resumo_processamento.get("analise_profunda", "Não informado")),
+        ("Arquivos de apoio", resumo_processamento.get("apoio", "Não informado")),
+        ("Arquivos ignorados", resumo_processamento.get("ignorados", "Não informado")),
+        ("Tempo total do processamento", resumo_processamento.get("tempo_total", "Não informado")),
+        ("Tempo da IA", resumo_processamento.get("tempo_ia", "Não informado")),
         ("Modelo IA", modelo_ia),
     ], row_height=30)
     row = _section(ws, row + 1, "Parecer Automático")
@@ -4317,6 +4330,11 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Origem", origem),
         ("Modelo IA", modelo_ia),
         ("Data da Análise", data_analise),
+        ("Análise IA", resumo_processamento.get("analise_profunda", "Não informado")),
+        ("Apoio", resumo_processamento.get("apoio", "Não informado")),
+        ("Ignorados", resumo_processamento.get("ignorados", "Não informado")),
+        ("Tempo total", resumo_processamento.get("tempo_total", "Não informado")),
+        ("Tempo IA", resumo_processamento.get("tempo_ia", "Não informado")),
     ], row_height=31)
 
     # DADOS EXTRAÍDOS
@@ -4489,7 +4507,52 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Contrato Assinado", v("contrato_assinado")),
         ("Quantidade de Pendências", len(pendencias_lista)),
         ("Arquivos analisados", v("arquivos_analisados", v("arquivo", "Não informado"))),
+        ("Arquivos para Análise IA", resumo_processamento.get("analise_profunda", "Não informado")),
+        ("Arquivos de apoio", resumo_processamento.get("apoio", "Não informado")),
+        ("Arquivos ignorados", resumo_processamento.get("ignorados", "Não informado")),
+        ("Tempo total do processamento", resumo_processamento.get("tempo_total", "Não informado")),
+        ("Tempo da IA", resumo_processamento.get("tempo_ia", "Não informado")),
+        ("Finalizado em", resumo_processamento.get("finalizado_em", "Não informado")),
     ], row_height=32)
+
+    # TRIAGEM DOS ANEXOS
+    ws = wb.create_sheet("Triagem dos Anexos")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Pré-triagem dos Anexos", 8, 95)
+
+    if triagem_lista:
+        df_triagem = pd.DataFrame(triagem_lista)
+    else:
+        df_triagem = pd.DataFrame([{
+            "Status": "Pré-triagem não disponível para este registro."
+        }])
+
+    _write_dataframe_table(ws, 5, df_triagem, {
+        "A": 58,
+        "B": 22,
+        "C": 14,
+        "D": 28,
+        "E": 74,
+    }, 48)
+
+    headers_triagem = {str(ws.cell(5, c).value).strip().lower(): c for c in range(1, ws.max_column + 1)}
+    decisao_col = headers_triagem.get("decisão") or headers_triagem.get("decisao")
+    for rr in range(6, ws.max_row + 1):
+        decisao_txt = str(ws.cell(rr, decisao_col).value if decisao_col else "").lower()
+        if "análise profunda" in decisao_txt or "analise profunda" in decisao_txt:
+            fill = s["soft_green"]
+            font_color = "166534"
+        elif "apoio" in decisao_txt:
+            fill = "DBEAFE"
+            font_color = "1E3A8A"
+        elif "ignorado" in decisao_txt:
+            fill = s["soft_danger"]
+            font_color = "991B1B"
+        else:
+            fill = "FFFFFF"
+            font_color = s["dark"]
+        for cc in range(1, ws.max_column + 1):
+            ws.cell(rr, cc).fill = PatternFill("solid", fgColor=fill)
+            ws.cell(rr, cc).font = Font(name="Calibri", size=10, bold=True, color=font_color)
 
     # TEXTO EXTRAÍDO
     ws = wb.create_sheet("Texto Extraído")
@@ -5052,6 +5115,844 @@ def render_info_card(label: str, value: Any) -> str:
         '</div>'
     )
 
+
+# =========================================================
+# POPUP AO VIVO DE PROCESSAMENTO
+# =========================================================
+def _formatar_tempo_execucao(segundos: float) -> str:
+    segundos = int(segundos)
+    minutos = segundos // 60
+    seg = segundos % 60
+
+    if minutos <= 0:
+        return f"{seg}s"
+
+    return f"{minutos}min {seg}s"
+
+
+def _icone_status_processamento(status: str) -> str:
+    status = str(status or "").upper()
+
+    if status in ("CONCLUIDO", "ANALISE_IA"):
+        return "✅" if status == "CONCLUIDO" else "🧠"
+
+    if status == "APOIO":
+        return "📎"
+
+    if status == "IGNORADO":
+        return "🚫"
+
+    if status == "PROCESSANDO":
+        return "🔄"
+
+    if status == "ERRO":
+        return "❌"
+
+    return "⏳"
+
+
+def atualizar_popup_processamento(
+    placeholder,
+    arquivos_status: Dict[str, str],
+    arquivo_atual: str,
+    etapa_atual: str,
+    inicio_processamento: float,
+) -> None:
+    """Atualiza um painel/modal fixo com andamento ao vivo da análise."""
+    total = len(arquivos_status)
+    concluidos = sum(1 for s in arquivos_status.values() if s in ("CONCLUIDO", "ANALISE_IA", "APOIO", "IGNORADO"))
+    erros = sum(1 for s in arquivos_status.values() if s == "ERRO")
+    pendentes = sum(1 for s in arquivos_status.values() if s == "PENDENTE")
+
+    percentual = int((concluidos / total) * 100) if total else 0
+    etapa_html = safe(etapa_atual).replace("\n", "<br>")
+    if str(arquivo_atual or "").startswith("Arquivos preparados"):
+        linha_arquivo_atual = f'<div><b>{safe(arquivo_atual)}</b></div>'
+    else:
+        linha_arquivo_atual = f'<div><b>Arquivo atual:</b> {safe(arquivo_atual or "Aguardando...")}</div>'
+    tempo = _formatar_tempo_execucao(time.perf_counter() - inicio_processamento)
+    ultima_atualizacao = datetime.now().strftime("%H:%M:%S")
+
+    linhas = ""
+    for nome, status in arquivos_status.items():
+        icone = _icone_status_processamento(status)
+        classe = "pendente"
+        if status in ("CONCLUIDO", "ANALISE_IA"):
+            classe = "concluido"
+        elif status == "APOIO":
+            classe = "apoio"
+        elif status == "IGNORADO":
+            classe = "ignorado"
+        elif status == "PROCESSANDO":
+            classe = "processando"
+        elif status == "ERRO":
+            classe = "erro"
+
+        # Importante: HTML sem recuo no início da linha.
+        # Streamlit/Markdown trata linhas HTML com 4+ espaços como bloco de código.
+        label_status = str(status or "")
+        label_status = label_status.replace("ANALISE_IA", "ANÁLISE IA")
+        linhas += (
+            f'<div class="linha-arquivo {classe}">'
+            f'<div class="arquivo-nome" title="{safe(nome)}">{icone} {safe(nome)}</div>'
+            f'<div class="arquivo-status">{safe(label_status)}</div>'
+            f'</div>\n'
+        )
+
+    html_popup = f"""
+<style>
+.popup-processamento-backdrop {{
+position: fixed;
+inset: 0;
+background: rgba(0, 0, 0, 0.58);
+z-index: 999999;
+display: flex;
+align-items: center;
+justify-content: center;
+backdrop-filter: blur(4px);
+}}
+.popup-processamento-card {{
+width: min(980px, 92vw);
+max-height: 86vh;
+overflow: hidden;
+background: linear-gradient(145deg, #071018 0%, #0b131c 55%, #111827 100%);
+border: 1px solid rgba(238, 202, 105, 0.55);
+border-radius: 22px;
+box-shadow: 0 22px 70px rgba(0,0,0,0.55);
+color: #ffffff;
+font-family: inherit;
+}}
+.popup-processamento-header {{
+padding: 24px 28px 16px 28px;
+border-bottom: 1px solid rgba(238, 202, 105, 0.22);
+}}
+.popup-processamento-header h2 {{
+margin: 0;
+color: #f5d36d;
+font-size: 26px;
+font-weight: 900;
+}}
+.popup-processamento-header p {{
+margin: 8px 0 0 0;
+color: rgba(255,255,255,0.82);
+font-size: 14px;
+}}
+.popup-processamento-body {{
+padding: 20px 28px 28px 28px;
+}}
+.popup-metricas {{
+display: grid;
+grid-template-columns: repeat(5, 1fr);
+gap: 12px;
+margin-bottom: 18px;
+}}
+.popup-metrica {{
+background: rgba(255,255,255,0.045);
+border: 1px solid rgba(238, 202, 105, 0.18);
+border-radius: 14px;
+padding: 12px 14px;
+}}
+.popup-metrica small {{
+display: block;
+color: #f5d36d;
+font-size: 10px;
+font-weight: 900;
+text-transform: uppercase;
+letter-spacing: .06em;
+margin-bottom: 6px;
+}}
+.popup-metrica strong {{
+display: block;
+color: #ffffff;
+font-size: 20px;
+font-weight: 900;
+}}
+.popup-etapa {{
+background: rgba(0, 94, 73, 0.35);
+border: 1px solid rgba(16, 185, 129, 0.28);
+border-radius: 16px;
+padding: 14px 16px;
+margin-bottom: 16px;
+}}
+.popup-etapa b {{
+color: #f5d36d;
+}}
+.barra-progresso {{
+height: 14px;
+width: 100%;
+background: rgba(255,255,255,0.10);
+border-radius: 999px;
+overflow: hidden;
+margin: 14px 0 18px 0;
+border: 1px solid rgba(238, 202, 105, 0.18);
+}}
+.barra-progresso-fill {{
+height: 100%;
+width: {percentual}%;
+background: linear-gradient(90deg, #10b981, #f5d36d);
+border-radius: 999px;
+transition: width .35s ease;
+}}
+.lista-arquivos {{
+max-height: 330px;
+overflow-y: auto;
+border-radius: 16px;
+border: 1px solid rgba(238, 202, 105, 0.18);
+}}
+.linha-arquivo {{
+display: grid;
+grid-template-columns: 1fr 150px;
+gap: 14px;
+padding: 11px 14px;
+border-bottom: 1px solid rgba(255,255,255,0.08);
+font-size: 13px;
+align-items: center;
+}}
+.linha-arquivo:last-child {{
+border-bottom: none;
+}}
+.arquivo-nome {{
+white-space: nowrap;
+overflow: hidden;
+text-overflow: ellipsis;
+font-weight: 800;
+}}
+.arquivo-status {{
+text-align: right;
+font-size: 11px;
+font-weight: 900;
+letter-spacing: .04em;
+}}
+.linha-arquivo.concluido {{
+background: rgba(22, 163, 74, 0.16);
+}}
+.linha-arquivo.processando {{
+background: rgba(245, 158, 11, 0.20);
+}}
+.linha-arquivo.erro {{
+background: rgba(220, 38, 38, 0.22);
+}}
+.linha-arquivo.apoio {{
+background: rgba(59, 130, 246, 0.14);
+}}
+.linha-arquivo.ignorado {{
+background: rgba(100, 116, 139, 0.18);
+color: rgba(255,255,255,0.72);
+}}
+.linha-arquivo.pendente {{
+background: rgba(255,255,255,0.025);
+}}
+.popup-rodape {{
+margin-top: 14px;
+color: rgba(255,255,255,0.62);
+font-size: 12px;
+}}
+</style>
+<div class="popup-processamento-backdrop">
+<div class="popup-processamento-card">
+<div class="popup-processamento-header">
+<h2>🚀 Analisando contrato e anexos</h2>
+<p>Não feche esta tela. O painel abaixo mostra o andamento em tempo real.</p>
+</div>
+<div class="popup-processamento-body">
+<div class="popup-metricas">
+<div class="popup-metrica"><small>Total</small><strong>{total}</strong></div>
+<div class="popup-metrica"><small>Concluídos</small><strong>{concluidos}</strong></div>
+<div class="popup-metrica"><small>Pendentes</small><strong>{pendentes}</strong></div>
+<div class="popup-metrica"><small>Erros</small><strong>{erros}</strong></div>
+<div class="popup-metrica"><small>Tempo</small><strong>{tempo}</strong></div>
+</div>
+<div class="popup-etapa">
+<div><b>Etapa atual:</b> {etapa_html}</div>
+{linha_arquivo_atual}
+<div><b>Última atualização:</b> {ultima_atualizacao}</div>
+</div>
+<div class="barra-progresso"><div class="barra-progresso-fill"></div></div>
+<div class="lista-arquivos">
+{linhas}
+</div>
+<div class="popup-rodape">
+Se o tempo continuar aumentando e o arquivo atual não mudar por muito tempo, provavelmente o processamento travou nesse anexo.
+</div>
+</div>
+</div>
+</div>
+"""
+
+    placeholder.markdown(html_popup, unsafe_allow_html=True)
+
+
+
+def _nome_low(nome: Any) -> str:
+    return clean_text(nome).lower()
+
+
+def _nome_indica_certificado(nome: Any) -> bool:
+    nome_low = _nome_low(nome)
+    return any(t in nome_low for t in [
+        "certificado de conclusão",
+        "certificado de conclusao",
+        "certificate of completion",
+        "certificado_docusign",
+        "certificado docusign",
+    ])
+
+
+def _nome_indica_apoio(nome: Any) -> bool:
+    nome_low = _nome_low(nome)
+    termos_apoio = [
+        "comunicado",
+        "apresentação",
+        "apresentacao",
+        "proposta",
+        "orçamento",
+        "orcamento",
+        "estudo de mercado",
+        "validacao",
+        "validação",
+        "aprovacao",
+        "aprovação",
+    ]
+    return any(t in nome_low for t in termos_apoio)
+
+
+def _normalizar_texto_chave(valor: Any) -> str:
+    txt = clean_text(valor).lower()
+    txt = txt.replace("º", "o").replace("°", "o")
+    txt = re.sub(r"[^a-z0-9]+", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def _ordinal_aditivo_numero_prioritario(nome: Any, texto: Any = "") -> int | None:
+    """
+    Descobre qual aditivo é, priorizando o nome/título do arquivo.
+    Não usa o texto inteiro primeiro, porque aditivos posteriores citam Primeiro/Segundo/etc. nos considerandos.
+    """
+    nome_txt = clean_text(nome)
+    texto_txt = clean_text(texto)
+
+    candidatos = [nome_txt]
+
+    # Título real costuma estar no começo do documento, antes dos considerandos.
+    inicio = texto_txt[:900]
+    candidatos.append(inicio)
+
+    for fonte in candidatos:
+        fonte_low = fonte.lower()
+
+        padroes = [
+            (1, [r"\bprimeiro\s+adit", r"\b1\s*[º°o]?\s*adit", r"\b1[º°]\s*adit"]),
+            (2, [r"\bsegundo\s+adit", r"\b2\s*[º°o]?\s*adit", r"\b2[º°]\s*adit"]),
+            (3, [r"\bterceiro\s+adit", r"\b3\s*[º°o]?\s*adit", r"\b3[º°]\s*adit"]),
+            (4, [r"\bquarto\s+adit", r"\b4\s*[º°o]?\s*adit", r"\b4[º°]\s*adit"]),
+            (5, [r"\bquinto\s+adit", r"\b5\s*[º°o]?\s*adit", r"\b5[º°]\s*adit"]),
+        ]
+
+        for numero, lista in padroes:
+            if any(re.search(p, fonte_low, flags=re.IGNORECASE) for p in lista):
+                return numero
+
+    return None
+
+
+def _evidencia_assinatura_arquivo(nome: Any, texto: Any) -> bool:
+    """
+    Evidência de assinatura para decidir análise profunda.
+    Para contrato/aditivo: DocuSign Envelope ID também é evidência forte.
+    Certificado isolado continua sendo APOIO pela classificação de tipo, não análise principal.
+    """
+    plano = f"{clean_text(nome)}\n{clean_text(texto)}".lower()
+    nome_low = _nome_low(nome)
+
+    if "assinado" in nome_low or "para_ass" in nome_low or "para ass" in nome_low:
+        return True
+
+    sinais_fortes = [
+        "certificate of completion",
+        "certificado de conclusão",
+        "certificado de conclusao",
+        "status: completed",
+        "status: concluído",
+        "status: concluido",
+        "assinatura concluída",
+        "assinatura concluida",
+        "signing complete",
+        "completed security checked",
+        "concluído segurança verificada",
+        "concluido seguranca verificada",
+    ]
+
+    if any(s in plano for s in sinais_fortes):
+        return True
+
+    # Muitos PDFs assinados trazem apenas o Envelope ID em cada página.
+    if "docusign envelope id" in plano:
+        return True
+
+    if re.search(r"\bassinad[oa]\s+em\b", plano, flags=re.IGNORECASE):
+        return True
+
+    return False
+
+
+def _tipo_documento_triagem(nome: Any, texto: Any = "") -> str:
+    nome_low = clean_text(nome).lower()
+    texto_inicio = clean_text(texto)[:2500].lower()
+    plano = f"{nome_low} {texto_inicio}"
+
+    # 1) Apoios explícitos pelo NOME mandam antes do conteúdo.
+    # Ex.: certificado pode citar "aditivo" no assunto, mas não é o aditivo principal.
+    if _nome_indica_certificado(nome):
+        return "Certificado DocuSign"
+    if "comunicado" in nome_low:
+        return "Comunicado"
+    if "apresentação" in nome_low or "apresentacao" in nome_low:
+        return "Apresentação"
+    if "proposta" in nome_low or "orçamento" in nome_low or "orcamento" in nome_low:
+        return "Proposta/Orçamento"
+    if "validação" in nome_low or "validacao" in nome_low or "aprovação" in nome_low or "aprovacao" in nome_low:
+        return "Validação/Aprovação"
+
+    # 2) Contrato/aditivo pelo NOME.
+    if "aditivo" in nome_low or "aditamento" in nome_low:
+        return "Aditivo"
+    if "contrato" in nome_low:
+        return "Contrato principal"
+
+    # 3) Apoios pelo conteúdo.
+    if "certificado de conclusão" in plano or "certificado de conclusao" in plano or "certificate of completion" in plano:
+        return "Certificado DocuSign"
+    if "comunicado" in plano:
+        return "Comunicado"
+    if "apresentação" in plano or "apresentacao" in plano or "estudo de mercado" in plano:
+        return "Apresentação"
+    if "proposta" in plano or "orçamento" in plano or "orcamento" in plano:
+        return "Proposta/Orçamento"
+
+    # 4) Contrato/aditivo pelo TÍTULO do começo do documento.
+    if _ordinal_aditivo_numero_prioritario(nome, texto):
+        return "Aditivo"
+    if re.search(r"\bcontrato\s+de\s+fornecimento\b|\bcontrato\s+de\s+prestação\b|\bcontrato\s+de\s+prestacao\b", texto_inicio, flags=re.IGNORECASE):
+        return "Contrato principal"
+
+    if "validação" in plano or "validacao" in plano or "aprovação" in plano or "aprovacao" in plano:
+        return "Validação/Aprovação"
+
+    return "Documento complementar"
+
+
+def _documento_precisa_assinatura(tipo: str) -> bool:
+    return tipo in ("Contrato principal", "Aditivo")
+
+
+def _documento_apoio_sem_aprovacao(tipo: str) -> bool:
+    return tipo in (
+        "Proposta/Orçamento",
+        "Certificado DocuSign",
+        "Comunicado",
+        "Apresentação",
+        "Validação/Aprovação",
+        "Documento complementar",
+    )
+
+
+def _chave_apoio_duplicado(nome: Any, tipo: str) -> str:
+    """
+    Cria chave para detectar duplicidade em documentos de apoio.
+    Ex.: apresentação assinada e apresentação sem assinatura devem ser a mesma família.
+    """
+    base = _normalizar_texto_chave(nome)
+    base = re.sub(r"\b(pdf|docx|doc|assinado|assinada|para|ass|para_ass|rev|revisao|revisão|minuta|rascunho|limpa)\b", " ", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+", " ", base).strip()
+    tipo_chave = _normalizar_texto_chave(tipo).replace(" ", "_") or "apoio"
+    return f"apoio_{tipo_chave}_{base or 'documento'}"
+
+
+def _chave_versao_documento(nome: Any, texto: Any = "") -> str:
+    tipo = _tipo_documento_triagem(nome, texto)
+    nome_low = _normalizar_texto_chave(nome)
+
+    if tipo == "Aditivo":
+        numero = _ordinal_aditivo_numero_prioritario(nome, texto)
+        if numero:
+            return f"aditivo_{numero}"
+        # fallback conservador para não juntar aditivos diferentes por engano
+        return "aditivo_" + re.sub(r"[^a-z0-9]+", "_", nome_low[:80]).strip("_")
+
+    if tipo == "Contrato principal":
+        return "contrato_principal"
+
+    if tipo == "Certificado DocuSign":
+        # certificado isolado não deve disputar com contrato/aditivo principal
+        m = re.search(r"(?:envelope id|identificação de envelope|identificacao de envelope)[:\s]*([A-Z0-9-]{20,})", clean_text(texto), flags=re.IGNORECASE)
+        if m:
+            return f"certificado_{m.group(1).lower()}"
+        return "certificado_docusign"
+
+    if tipo == "Apresentação":
+        # Apresentação assinada e apresentação sem assinatura do mesmo assunto viram a mesma família.
+        # Assim a versão assinada fica como APOIO e a duplicada sem assinatura vira IGNORADO.
+        return _chave_apoio_duplicado(nome, tipo)
+
+    base = re.sub(r"[^a-z0-9]+", "_", nome_low[:90]).strip("_")
+    return f"apoio_{base or 'documento'}"
+
+
+def _pontuacao_triagem(nome: Any, texto: Any) -> int:
+    nome_low = _nome_low(nome)
+    tipo = _tipo_documento_triagem(nome, texto)
+    plano = f"{nome_low} {clean_text(texto)[:3000].lower()}"
+    pontos = 0
+
+    if nome_low.endswith(".pdf"):
+        pontos += 300
+    if nome_low.endswith(".docx"):
+        pontos -= 220
+
+    if tipo in ("Contrato principal", "Aditivo"):
+        pontos += 250
+
+    if _evidencia_assinatura_arquivo(nome, texto):
+        pontos += 600
+
+    if "assinado" in nome_low or "para_ass" in nome_low or "para ass" in nome_low:
+        pontos += 300
+
+    if "certificate of completion" in plano or "certificado de conclusão" in plano or "certificado de conclusao" in plano:
+        pontos += 250
+
+    # Minutas/revisões caem, mas se for o único arquivo assinado ainda pode subir.
+    if any(t in nome_low for t in ["minuta", "rascunho", "rev", "revisao", "revisão"]):
+        pontos -= 140
+
+    if "limpa(assinado)" in nome_low or "limpa (assinado)" in nome_low:
+        pontos += 260
+    elif "limpa" in nome_low:
+        pontos += 40
+
+    if tipo in ("Certificado DocuSign", "Comunicado", "Apresentação", "Proposta/Orçamento", "Validação/Aprovação"):
+        # Apoio não deve vencer contrato/aditivo principal.
+        pontos -= 300
+
+    return pontos
+
+
+def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Pré-triagem executiva antes da IA.
+    A análise profunda recebe apenas documentos assinados/relevantes.
+    Arquivos sem assinatura, minutas, duplicados e versões antigas entram como ignorados com motivo.
+    """
+    registros = []
+    for arquivo in arquivos:
+        nome = getattr(arquivo, "name", "documento")
+        texto = textos_por_arquivo.get(nome, "")
+        tipo = _tipo_documento_triagem(nome, texto)
+        precisa_assinatura = _documento_precisa_assinatura(tipo)
+        assinado = _evidencia_assinatura_arquivo(nome, texto)
+        chave = _chave_versao_documento(nome, texto)
+        pontos = _pontuacao_triagem(nome, texto)
+        registros.append({
+            "arquivo_obj": arquivo,
+            "Arquivo": nome,
+            "Tipo": tipo,
+            "Assinado": "Sim" if assinado else "Não",
+            "Precisa assinatura": "Sim" if precisa_assinatura else "Não",
+            "chave": chave,
+            "pontos": pontos,
+            "texto": texto,
+            "Decisão": "Pendente",
+            "Motivo": "",
+        })
+
+    melhor_por_chave: Dict[str, Dict[str, Any]] = {}
+    for reg in registros:
+        if reg["Precisa assinatura"] != "Sim":
+            continue
+        atual = melhor_por_chave.get(reg["chave"])
+        if atual is None or reg["pontos"] > atual["pontos"]:
+            melhor_por_chave[reg["chave"]] = reg
+
+    # Apoios também podem ter duplicidade. Ex.: apresentação assinada + apresentação sem assinatura.
+    # A melhor versão fica como APOIO; as duplicadas viram IGNORADO para manter 6/3/9 no teste BBP.
+    melhor_apoio_por_chave: Dict[str, Dict[str, Any]] = {}
+    qtd_apoio_por_chave: Dict[str, int] = {}
+    existe_apresentacao_assinada = any(
+        reg.get("Tipo") == "Apresentação"
+        and ("assinado" in _nome_low(reg.get("Arquivo")) or "assinada" in _nome_low(reg.get("Arquivo")))
+        for reg in registros
+    )
+    for reg in registros:
+        if reg["Precisa assinatura"] == "Sim":
+            continue
+        if reg["Tipo"] not in ("Apresentação",):
+            continue
+        qtd_apoio_por_chave[reg["chave"]] = qtd_apoio_por_chave.get(reg["chave"], 0) + 1
+        atual = melhor_apoio_por_chave.get(reg["chave"])
+        if atual is None or reg["pontos"] > atual["pontos"]:
+            melhor_apoio_por_chave[reg["chave"]] = reg
+
+    enviados_ia = []
+    textos_ia = []
+    triagem = []
+
+    for reg in registros:
+        precisa_assinatura = reg["Precisa assinatura"] == "Sim"
+        tipo = reg["Tipo"]
+        melhor = melhor_por_chave.get(reg["chave"])
+        eh_melhor = melhor is reg
+        nome_low = _nome_low(reg["Arquivo"])
+
+        if precisa_assinatura:
+            if reg["Assinado"] == "Sim" and eh_melhor:
+                reg["Decisão"] = "Análise profunda"
+                reg["Motivo"] = "Documento assinado selecionado como melhor versão para análise da IA."
+                enviados_ia.append(reg["arquivo_obj"])
+                textos_ia.append(reg)
+            elif reg["Assinado"] == "Sim" and not eh_melhor:
+                reg["Decisão"] = "Ignorado da análise profunda"
+                reg["Motivo"] = "Versão assinada duplicada/menos prioritária; existe versão melhor do mesmo documento."
+            elif melhor and melhor.get("Assinado") == "Sim":
+                reg["Decisão"] = "Ignorado da análise profunda"
+                reg["Motivo"] = "Sem assinatura ou versão antiga; existe versão assinada equivalente."
+            else:
+                reg["Decisão"] = "Ignorado da análise profunda"
+                reg["Motivo"] = "Documento exige assinatura, mas não foi localizada evidência suficiente de assinatura."
+        else:
+            # Apoios não são enviados como arquivo original pesado, mas o texto pode entrar como apoio no prompt.
+            melhor_apoio = melhor_apoio_por_chave.get(reg["chave"])
+            apoio_duplicado = reg["Tipo"] == "Apresentação" and qtd_apoio_por_chave.get(reg["chave"], 0) > 1 and melhor_apoio is not reg
+
+            # Regra específica: se existem duas apresentações de reajuste e uma delas tem
+            # "assinado" no nome, só a assinada fica como APOIO; a outra vira IGNORADO.
+            apoio_apresentacao_sem_assinatura = (
+                reg["Tipo"] == "Apresentação"
+                and existe_apresentacao_assinada
+                and "assinado" not in nome_low
+                and "assinada" not in nome_low
+            )
+
+            if apoio_duplicado or apoio_apresentacao_sem_assinatura:
+                reg["Decisão"] = "Ignorado da análise profunda"
+                reg["Motivo"] = "Documento de apoio duplicado; existe versão assinada/equivalente selecionada como apoio."
+            elif any(t in nome_low for t in ["comunicado", "apresentação", "apresentacao"]):
+                reg["Decisão"] = "Apoio simples"
+                reg["Motivo"] = "Documento de apoio; usado apenas como contexto, sem análise jurídica profunda."
+                textos_ia.append(reg)
+            elif tipo == "Certificado DocuSign":
+                reg["Decisão"] = "Apoio de assinatura"
+                reg["Motivo"] = "Certificado usado para validar assinatura, sem virar documento contratual separado."
+                textos_ia.append(reg)
+            else:
+                reg["Decisão"] = "Apoio simples"
+                reg["Motivo"] = "Documento não exige assinatura formal; usado como contexto de apoio."
+                textos_ia.append(reg)
+
+        triagem.append({
+            "Arquivo": reg["Arquivo"],
+            "Tipo": reg["Tipo"],
+            "Assinado": reg["Assinado"],
+            "Decisão": reg["Decisão"],
+            "Motivo": reg["Motivo"],
+        })
+
+    # Segurança: se nenhum arquivo foi enviado para a IA, envia o pacote completo para não perder análise.
+    if not enviados_ia:
+        enviados_ia = list(arquivos)
+        for item in triagem:
+            if item["Decisão"] == "Ignorado da análise profunda":
+                item["Decisão"] = "Análise profunda"
+                item["Motivo"] = "Fallback de segurança: nenhum documento assinado foi selecionado, então o arquivo foi enviado para análise."
+
+    return {
+        "arquivos_para_ia": enviados_ia,
+        "textos_para_ia": textos_ia,
+        "triagem": triagem,
+    }
+
+
+def montar_texto_para_ia_com_triagem(textos_por_arquivo: Dict[str, str], triagem: List[Dict[str, Any]]) -> str:
+    """Monta texto reduzido e explicado para a IA, com documentos relevantes + apoios."""
+    decisao_por_arquivo = {t.get("Arquivo"): t for t in triagem}
+    partes = [
+        "TRIAGEM AUTOMÁTICA DOS ANEXOS ANTES DA IA",
+        "Regra: documentos assinados recebem análise profunda; minutas/duplicados/sem assinatura ficam apenas registrados com motivo.",
+        "",
+    ]
+
+    for item in triagem:
+        partes.append(
+            f"- {item.get('Arquivo')} | Tipo: {item.get('Tipo')} | Assinado: {item.get('Assinado')} | Decisão: {item.get('Decisão')} | Motivo: {item.get('Motivo')}"
+        )
+
+    partes.append("\n==============================\nDOCUMENTOS ENVIADOS COMO BASE DA ANÁLISE\n==============================")
+
+    for nome, texto in textos_por_arquivo.items():
+        item = decisao_por_arquivo.get(nome, {})
+        decisao = item.get("Decisão", "")
+        if decisao in ("Análise profunda", "Apoio simples", "Apoio de assinatura"):
+            partes.append("\n\n==============================")
+            partes.append(f"ARQUIVO: {nome}")
+            partes.append(f"DECISÃO DA TRIAGEM: {decisao}")
+            partes.append(f"MOTIVO: {item.get('Motivo', '')}")
+            partes.append("==============================")
+            partes.append(str(texto or ""))
+
+    return "\n".join(partes).strip()
+
+
+def executar_ia_com_timer_ao_vivo(
+    funcao_ia,
+    popup_processamento,
+    arquivos_status: Dict[str, str],
+    inicio_processamento: float,
+    *args,
+    **kwargs,
+):
+    """Executa Gemini em segundo plano e mantém o popup atualizando o tempo da IA."""
+    resultado_box: Dict[str, Any] = {}
+    erro_box: Dict[str, Any] = {}
+    inicio_ia = time.perf_counter()
+    total = len(arquivos_status)
+
+    def alvo():
+        try:
+            resultado_box["resultado"] = funcao_ia(*args, **kwargs)
+        except Exception as exc:
+            erro_box["erro"] = exc
+
+    thread = threading.Thread(target=alvo, daemon=True)
+    try:
+        if add_script_run_ctx is not None:
+            add_script_run_ctx(thread)
+    except Exception:
+        pass
+
+    thread.start()
+    while thread.is_alive():
+        tempo_ia = _formatar_tempo_execucao(time.perf_counter() - inicio_ia)
+        preparados = sum(1 for s in arquivos_status.values() if s != "PENDENTE")
+        atualizar_popup_processamento(
+            popup_processamento,
+            arquivos_status,
+            f"Arquivos preparados: {preparados}/{total}",
+            f"IA analisando o pacote final...\nTempo da IA: {tempo_ia}",
+            inicio_processamento,
+        )
+        time.sleep(1)
+
+    tempo_ia_final = time.perf_counter() - inicio_ia
+    try:
+        st.session_state["ultimo_tempo_ia_segundos"] = tempo_ia_final
+    except Exception:
+        pass
+
+    if erro_box:
+        raise erro_box["erro"]
+
+    resultado_final = resultado_box.get("resultado")
+    if isinstance(resultado_final, dict):
+        resultado_final["_tempo_ia_segundos"] = tempo_ia_final
+
+    return resultado_final
+
+
+def render_triagem_anexos(resultado: Dict[str, Any]) -> None:
+    triagem = resultado.get("triagem_anexos") or []
+    if not isinstance(triagem, list) or not triagem:
+        return
+
+    total = len(triagem)
+    profunda = sum(1 for x in triagem if x.get("Decisão") == "Análise profunda")
+    apoio = sum(1 for x in triagem if str(x.get("Decisão", "")).startswith("Apoio"))
+    ignorados = sum(1 for x in triagem if "Ignorado" in str(x.get("Decisão", "")))
+
+    st.markdown('<div class="section-title">Triagem dos anexos</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(render_metric("Arquivos", total), unsafe_allow_html=True)
+    c2.markdown(render_metric("Análise profunda", profunda), unsafe_allow_html=True)
+    c3.markdown(render_metric("Apoio", apoio), unsafe_allow_html=True)
+    c4.markdown(render_metric("Ignorados", ignorados), unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="executive-box"><h3>🧭 Pré-triagem automática</h3>'
+        '<p>O robô priorizou documentos assinados para análise profunda. Minutas, duplicados e arquivos sem assinatura foram registrados com motivo para não atrasar a IA.</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    df = pd.DataFrame(triagem)
+    colunas = [c for c in ["Arquivo", "Tipo", "Assinado", "Decisão", "Motivo"] if c in df.columns]
+
+    def _cor_triagem(row):
+        decisao = str(row.get("Decisão", ""))
+        if decisao == "Análise profunda":
+            return ["background-color: rgba(22, 163, 74, 0.18); color: #ffffff; font-weight: 700;"] * len(row)
+        if decisao.startswith("Apoio"):
+            return ["background-color: rgba(59, 130, 246, 0.14); color: #ffffff; font-weight: 700;"] * len(row)
+        if "Ignorado" in decisao:
+            return ["background-color: rgba(100, 116, 139, 0.18); color: rgba(255,255,255,0.82); font-weight: 700;"] * len(row)
+        return [""] * len(row)
+
+    with st.expander("📋 Ver arquivos ignorados/apoio e motivo", expanded=False):
+        st.dataframe(df[colunas].style.apply(_cor_triagem, axis=1), use_container_width=True, hide_index=True)
+
+def render_resumo_processamento_final(resultado: Dict[str, Any]) -> None:
+    """Mostra um resumo final da execução depois que o popup fecha."""
+    resumo = resultado.get("resumo_processamento") or {}
+    if not isinstance(resumo, dict) or not resumo:
+        return
+
+    st.markdown('<div class="section-title">Resumo do processamento</div>', unsafe_allow_html=True)
+
+    total = resumo.get("total_arquivos", 0)
+    profunda = resumo.get("analise_profunda", 0)
+    apoio = resumo.get("apoio", 0)
+    ignorados = resumo.get("ignorados", 0)
+    tempo_total = resumo.get("tempo_total", "0s")
+    tempo_ia = resumo.get("tempo_ia", "0s")
+    finalizado_em = resumo.get("finalizado_em", "")
+
+    html = f'''
+<div class="executive-box" style="padding:22px 24px;">
+    <h3 style="margin:0 0 14px 0;">✅ Análise concluída</h3>
+    <p style="margin:0 0 18px 0;">O processamento foi finalizado com sucesso. O popup foi fechado para liberar a tela, mas o resumo da execução fica registrado abaixo.</p>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;">
+        <div class="valor-card" style="min-height:95px;padding:14px;">
+            <div class="valor-titulo">TOTAL</div>
+            <div class="valor-principal" style="font-size:22px;">{safe(total)}</div>
+        </div>
+        <div class="valor-card" style="min-height:95px;padding:14px;">
+            <div class="valor-titulo">ANÁLISE IA</div>
+            <div class="valor-principal" style="font-size:22px;">{safe(profunda)}</div>
+        </div>
+        <div class="valor-card" style="min-height:95px;padding:14px;">
+            <div class="valor-titulo">APOIO</div>
+            <div class="valor-principal" style="font-size:22px;">{safe(apoio)}</div>
+        </div>
+        <div class="valor-card" style="min-height:95px;padding:14px;">
+            <div class="valor-titulo">IGNORADOS</div>
+            <div class="valor-principal" style="font-size:22px;">{safe(ignorados)}</div>
+        </div>
+        <div class="valor-card" style="min-height:95px;padding:14px;">
+            <div class="valor-titulo">TEMPO TOTAL</div>
+            <div class="valor-principal" style="font-size:22px;">{safe(tempo_total)}</div>
+        </div>
+        <div class="valor-card" style="min-height:95px;padding:14px;">
+            <div class="valor-titulo">TEMPO IA</div>
+            <div class="valor-principal" style="font-size:22px;">{safe(tempo_ia)}</div>
+        </div>
+    </div>
+    <div class="valor-alerta" style="margin-top:16px;display:inline-block;">Finalizado em {safe(finalizado_em)}</div>
+</div>
+'''
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def fechar_popup_processamento(placeholder) -> None:
+    placeholder.empty()
+
+
 def render_aditivos_contrato(resultado: Dict[str, Any]) -> None:
     """Renderiza seção executiva de aditivos identificados de forma limpa e profissional."""
     aditivos = normalizar_aditivos_contrato(resultado.get("aditivos_contrato", []))
@@ -5379,6 +6280,8 @@ def render_analise_completa_historico(row: pd.Series) -> None:
     st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
     st.markdown(f'<span class="pill {pill}">{safe(resultado.get("resumo_executivo"))}</span>', unsafe_allow_html=True)
 
+    render_triagem_anexos(resultado)
+
     st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
     cards_html = "".join(
         render_info_card(label, resultado.get(chave))
@@ -5388,6 +6291,11 @@ def render_analise_completa_historico(row: pd.Series) -> None:
 
     st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>', unsafe_allow_html=True)
+
+    # No histórico, mostra as mesmas seções da Nova Análise.
+    # Antes essas informações ficavam salvas no resultado_json, mas não eram renderizadas na tela.
+    render_aditivos_contrato(resultado)
+    render_itens_contrato(resultado)
 
     st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
     df_checklist = pd.DataFrame(resultado.get("checklist", []))
@@ -6029,18 +6937,59 @@ if pagina == "📄 Nova Análise":
         st.success(f"{len(arquivos)} arquivo(s) carregado(s). Clique abaixo para iniciar a análise.")
 
         if st.button("🚀 Analisar contrato e anexos", use_container_width=True):
-            with st.spinner("Lendo contrato e anexos..."):
+            popup_processamento = st.empty()
+            inicio_processamento = time.perf_counter()
+            st.session_state["ultimo_tempo_ia_segundos"] = 0
+            arquivos_status = {arquivo.name: "PENDENTE" for arquivo in arquivos}
+
+            atualizar_popup_processamento(
+                popup_processamento,
+                arquivos_status,
+                "",
+                "Preparando arquivos para análise",
+                inicio_processamento,
+            )
+
+            try:
                 texto_total = ""
+                textos_por_arquivo: Dict[str, str] = {}
 
                 for arquivo in arquivos:
+                    arquivos_status[arquivo.name] = "PROCESSANDO"
+                    atualizar_popup_processamento(
+                        popup_processamento,
+                        arquivos_status,
+                        arquivo.name,
+                        "Lendo e preparando anexo",
+                        inicio_processamento,
+                    )
+
                     try:
                         if arquivo.name.lower().endswith(".pdf"):
                             texto_arquivo = ler_pdf(arquivo)
                         else:
                             texto_arquivo = ler_docx(arquivo)
+
+                        arquivos_status[arquivo.name] = "CONCLUIDO"
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            arquivo.name,
+                            "Anexo processado com sucesso",
+                            inicio_processamento,
+                        )
                     except Exception as e:
                         texto_arquivo = f"Erro ao ler arquivo {arquivo.name}: {e}"
+                        arquivos_status[arquivo.name] = "ERRO"
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            arquivo.name,
+                            "Erro ao processar anexo",
+                            inicio_processamento,
+                        )
 
+                    textos_por_arquivo[arquivo.name] = texto_arquivo
                     texto_total += "\n\n==============================\n"
                     texto_total += f"ARQUIVO: {arquivo.name}\n"
                     texto_total += "==============================\n"
@@ -6048,23 +6997,96 @@ if pagina == "📄 Nova Análise":
 
                 texto = texto_total.strip()
 
+                atualizar_popup_processamento(
+                    popup_processamento,
+                    arquivos_status,
+                    "Triagem",
+                    "Classificando anexos: assinados, apoio, duplicados e ignorados",
+                    inicio_processamento,
+                )
+
+                triagem_info = classificar_anexos_para_analise(arquivos, textos_por_arquivo)
+                triagem_anexos = triagem_info.get("triagem", [])
+                arquivos_para_ia = triagem_info.get("arquivos_para_ia", arquivos)
+                texto_para_ia = montar_texto_para_ia_com_triagem(textos_por_arquivo, triagem_anexos)
+
+                decisao_por_arquivo = {t.get("Arquivo"): t.get("Decisão") for t in triagem_anexos}
+                for nome_arquivo, decisao in decisao_por_arquivo.items():
+                    if decisao == "Análise profunda":
+                        arquivos_status[nome_arquivo] = "ANALISE_IA"
+                    elif str(decisao).startswith("Apoio"):
+                        arquivos_status[nome_arquivo] = "APOIO"
+                    elif "Ignorado" in str(decisao):
+                        arquivos_status[nome_arquivo] = "IGNORADO"
+
+                atualizar_popup_processamento(
+                    popup_processamento,
+                    arquivos_status,
+                    f"Arquivos preparados: {len(arquivos_status)}/{len(arquivos_status)}",
+                    f"Triagem concluída. {len(arquivos_para_ia)} arquivo(s) seguirão para análise profunda da IA",
+                    inicio_processamento,
+                )
+
                 try:
                     if modo != "Análise Local":
                         if not gemini_key:
+                            fechar_popup_processamento(popup_processamento)
                             st.error("Configure a GEMINI_API_KEY no Streamlit Secrets ou no arquivo .env para usar a análise IA.")
                             st.stop()
 
-                        resultado = analisar_gemini(
-                            texto=texto,
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            f"Arquivos preparados: {len(arquivos_status)}/{len(arquivos_status)}",
+                            "IA analisando o pacote final...\nTempo da IA: 0s",
+                            inicio_processamento,
+                        )
+
+                        resultado = executar_ia_com_timer_ao_vivo(
+                            analisar_gemini,
+                            popup_processamento,
+                            arquivos_status,
+                            inicio_processamento,
+                            texto=texto_para_ia,
                             api_key=gemini_key,
                             opcao_modelo=modo,
-                            arquivos_originais=arquivos,
+                            arquivos_originais=arquivos_para_ia,
+                        )
+
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            "Gemini",
+                            "IA finalizou a análise. Preparando resultado na tela",
+                            inicio_processamento,
                         )
                     else:
-                        resultado = local_extract(texto)
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            "Análise Local",
+                            "Executando análise local dos documentos",
+                            inicio_processamento,
+                        )
+                        resultado = local_extract(texto_para_ia)
                 except Exception as e:
+                    atualizar_popup_processamento(
+                        popup_processamento,
+                        arquivos_status,
+                        "Análise Local",
+                        "A IA falhou. Executando análise local de contingência",
+                        inicio_processamento,
+                    )
                     st.warning(f"A IA falhou e o sistema usou análise local. Detalhe: {e}")
                     resultado = local_extract(texto)
+
+                atualizar_popup_processamento(
+                    popup_processamento,
+                    arquivos_status,
+                    "Resultado",
+                    "Normalizando dados, aplicando regras e salvando histórico",
+                    inicio_processamento,
+                )
 
                 resultado["texto_extraido"] = texto
                 resultado = normalizar(resultado)
@@ -6085,6 +7107,25 @@ if pagina == "📄 Nova Análise":
                 resultado["arquivos_analisados"] = nomes_arquivos
                 resultado["tipo_origem"] = origem_contrato.replace("📘", "").replace("🛒", "").strip()
                 resultado["modelo_ia"] = resultado.get("modelo_ia", modo if modo != "Análise Local" else "Análise Local")
+                resultado["triagem_anexos"] = triagem_anexos
+                resultado["arquivos_enviados_analise_profunda"] = " | ".join([getattr(a, "name", "documento") for a in arquivos_para_ia])
+                resultado["arquivos_ignorados_analise_profunda"] = [t for t in triagem_anexos if "Ignorado" in str(t.get("Decisão", ""))]
+
+                total_triagem = len(triagem_anexos)
+                qtd_profunda = sum(1 for x in triagem_anexos if x.get("Decisão") == "Análise profunda")
+                qtd_apoio = sum(1 for x in triagem_anexos if str(x.get("Decisão", "")).startswith("Apoio"))
+                qtd_ignorados = sum(1 for x in triagem_anexos if "Ignorado" in str(x.get("Decisão", "")))
+                tempo_total_segundos = time.perf_counter() - inicio_processamento
+                tempo_ia_segundos = float(resultado.get("_tempo_ia_segundos") or st.session_state.get("ultimo_tempo_ia_segundos", 0) or 0)
+                resultado["resumo_processamento"] = {
+                    "total_arquivos": total_triagem or len(arquivos),
+                    "analise_profunda": qtd_profunda,
+                    "apoio": qtd_apoio,
+                    "ignorados": qtd_ignorados,
+                    "tempo_total": _formatar_tempo_execucao(tempo_total_segundos),
+                    "tempo_ia": _formatar_tempo_execucao(tempo_ia_segundos),
+                    "finalizado_em": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                }
 
                 # Reprocessa aditivos depois que data_analise e arquivos_analisados já foram preenchidos
                 resultado = aplicar_regras_aditivos(resultado, texto)
@@ -6097,6 +7138,21 @@ if pagina == "📄 Nova Análise":
                     texto_extraido=texto,
                 )
 
+                atualizar_popup_processamento(
+                    popup_processamento,
+                    arquivos_status,
+                    "Concluído",
+                    f"Análise concluída com sucesso\nTempo total: {resultado['resumo_processamento']['tempo_total']}\nTempo da IA: {resultado['resumo_processamento']['tempo_ia']}",
+                    inicio_processamento,
+                )
+                time.sleep(1.2)
+                fechar_popup_processamento(popup_processamento)
+
+            except Exception as e:
+                fechar_popup_processamento(popup_processamento)
+                st.error(f"Erro durante a análise: {e}")
+                st.stop()
+
             risco = normalize_risco(resultado.get("risco"))
             pill = "pill-ok" if risco == "BAIXO" else "pill-warn" if risco == "MÉDIO" else "pill-danger"
 
@@ -6106,11 +7162,15 @@ if pagina == "📄 Nova Análise":
             c3.markdown(render_metric("Score", resultado.get("score")), unsafe_allow_html=True)
             c4.markdown(render_metric("Pendências", len(resultado.get("pendencias", []))), unsafe_allow_html=True)
 
+            render_resumo_processamento_final(resultado)
+
             if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
                 st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
 
             st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
             st.markdown(f'<span class="pill {pill}">{safe(resultado.get("resumo_executivo"))}</span>', unsafe_allow_html=True)
+
+            render_triagem_anexos(resultado)
 
             st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
             cards_html = "".join(
@@ -6338,6 +7398,25 @@ if pagina == "📚 Histórico":
         except Exception:
             return padrao
 
+    def _hist_json_nested_val(row, pai: str, chave: str, padrao: str = "Não informado") -> str:
+        try:
+            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
+            bloco = payload.get(pai, {}) if isinstance(payload, dict) else {}
+            valor = bloco.get(chave, padrao) if isinstance(bloco, dict) else padrao
+            if valor in (None, "", [], {}, "Não localizado", "Não localizada"):
+                return padrao
+            return str(valor)
+        except Exception:
+            return padrao
+
+    def _hist_json_count(row, chave: str) -> int:
+        try:
+            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
+            valor = payload.get(chave, []) if isinstance(payload, dict) else []
+            return len(valor) if isinstance(valor, list) else 0
+        except Exception:
+            return 0
+
     if "resultado_json" in filtrado_export.columns:
         campos_json_excel = {
             "valor_mensal_estimado": "valor_mensal_estimado",
@@ -6346,15 +7425,36 @@ if pagina == "📚 Histórico":
             "data_contrato": "data_contrato",
             "data_conclusao_docusign": "data_conclusao_docusign",
             "pessoas_que_assinaram": "pessoas_que_assinaram",
+            "resumo_aditivos": "resumo_aditivos",
         }
         for destino, chave_json in campos_json_excel.items():
             if destino not in filtrado_export.columns:
                 filtrado_export[destino] = filtrado_export.apply(lambda row, ch=chave_json: _hist_json_val(row, ch), axis=1)
 
+        campos_processamento_excel = {
+            "triagem_total_arquivos": ("resumo_processamento", "total_arquivos"),
+            "triagem_analise_ia": ("resumo_processamento", "analise_profunda"),
+            "triagem_apoio": ("resumo_processamento", "apoio"),
+            "triagem_ignorados": ("resumo_processamento", "ignorados"),
+            "tempo_total_processamento": ("resumo_processamento", "tempo_total"),
+            "tempo_ia": ("resumo_processamento", "tempo_ia"),
+        }
+        for destino, (pai, chave_json) in campos_processamento_excel.items():
+            if destino not in filtrado_export.columns:
+                filtrado_export[destino] = filtrado_export.apply(lambda row, pa=pai, ch=chave_json: _hist_json_nested_val(row, pa, ch), axis=1)
+
+        if "qtd_aditivos" not in filtrado_export.columns:
+            filtrado_export["qtd_aditivos"] = filtrado_export.apply(lambda row: _hist_json_count(row, "aditivos_contrato"), axis=1)
+        if "qtd_itens_contrato" not in filtrado_export.columns:
+            filtrado_export["qtd_itens_contrato"] = filtrado_export.apply(lambda row: _hist_json_count(row, "itens_contrato"), axis=1)
+
     export_cols = [
         "id", "data_analise", "fornecedor", "cnpj", "valor_total",
         "valor_mensal_estimado", "valor_total_estimado_vigencia", "valor_total_materiais_servicos",
+        "qtd_aditivos", "resumo_aditivos", "qtd_itens_contrato",
         "data_contrato", "data_conclusao_docusign", "pessoas_que_assinaram",
+        "triagem_total_arquivos", "triagem_analise_ia", "triagem_apoio", "triagem_ignorados",
+        "tempo_total_processamento", "tempo_ia",
         "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
     ]
     export_df = filtrado_export[[c for c in export_cols if c in filtrado_export.columns]].copy()
@@ -6367,9 +7467,18 @@ if pagina == "📚 Histórico":
         "valor_mensal_estimado": "Valor mensal estimado",
         "valor_total_estimado_vigencia": "Valor total estimado da vigência",
         "valor_total_materiais_servicos": "Valor total dos materiais e serviços",
+        "qtd_aditivos": "Qtd. aditivos",
+        "resumo_aditivos": "Resumo dos aditivos",
+        "qtd_itens_contrato": "Qtd. itens/serviços",
         "data_contrato": "Data do contrato",
         "data_conclusao_docusign": "Data conclusão DocuSign",
         "pessoas_que_assinaram": "Pessoas que assinaram",
+        "triagem_total_arquivos": "Total de anexos",
+        "triagem_analise_ia": "Análise IA",
+        "triagem_apoio": "Apoio",
+        "triagem_ignorados": "Ignorados",
+        "tempo_total_processamento": "Tempo total processamento",
+        "tempo_ia": "Tempo IA",
         "vigencia": "Vigência",
         "status": "Status",
         "risco": "Risco",

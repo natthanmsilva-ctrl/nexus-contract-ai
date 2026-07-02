@@ -1,14 +1,12 @@
 # Auditor de Contratos - Grupo SBF
 
-Versão com ajustes finais da análise de aditivos.
+Versão com correção final da pré-triagem, histórico completo e Excel.
 
-## Rodar local
+Ajustes desta entrega:
+- Apresentação duplicada sem assinatura vai para IGNORADO quando existir versão assinada equivalente.
+- Histórico renderiza Aditivos identificados e Materiais/Serviços identificados.
+- Excel individual mantém abas de Aditivos, Itens dos Aditivos, Itens do Contrato e Triagem dos Anexos.
+- Excel do histórico filtrado inclui campos de triagem, quantidade de aditivos e quantidade de itens/serviços.
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Observação
-
-Configure a chave no `.env` local ou nos secrets do ambiente publicado. Não envie `.env` para repositório.
+Configuração:
+- Defina GEMINI_API_KEY no .env local ou nos Secrets da publicação.
