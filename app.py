@@ -78,6 +78,7 @@ CAMPOS_OFICIAIS = [
     ("Multa", "multa"),
     ("Vigência após a data de assinatura", "vigencia_apos_assinatura"),
     ("Período de Vigência", "periodo_vigencia_formatado"),
+    ("Resumo de Aditivos", "resumo_aditivos"),
     ("Rescisão e Indenização", "rescisao_indenizacao"),
     ("Anticorrupção", "anticorrupcao"),
     ("Proteção de Dados LGPD", "protecao_dados_lgpd"),
@@ -92,6 +93,7 @@ CAMPOS_OFICIAIS = [
 ]
 
 CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
+    "aditivos_contrato",
     "contraparte", "fornecedor",
     "contrato_assinado", "alerta_assinatura", "status", "risco", "score",
     "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato"
@@ -1089,6 +1091,1418 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
 
     return normalizados
 
+def _mapear_anexos_aditivos_por_texto(texto: str) -> Dict[str, str]:
+    """
+    Tenta mapear datas de aditivos para o nome do arquivo/anexo.
+    O texto do robô vem separado por blocos:
+    ARQUIVO: nome_do_arquivo.pdf
+    """
+    texto = str(texto or "")
+    mapa: Dict[str, str] = {}
+
+    blocos = re.split(r"\n\s*ARQUIVO:\s*", texto, flags=re.IGNORECASE)
+
+    for bloco in blocos:
+        bloco = str(bloco or "").strip()
+        if not bloco:
+            continue
+
+        linhas = bloco.splitlines()
+        if not linhas:
+            continue
+
+        nome_arquivo = clean_text(linhas[0]).strip()
+        conteudo = "\n".join(linhas[1:]) if len(linhas) > 1 else bloco
+        conteudo_low = conteudo.lower()
+        nome_low = nome_arquivo.lower()
+
+        eh_aditivo = any(t in conteudo_low or t in nome_low for t in [
+            "aditivo",
+            "termo aditivo",
+            "aditamento",
+            "renovação",
+            "renovacao",
+            "prorrogação",
+            "prorrogacao",
+            "reajuste",
+        ])
+
+        if not eh_aditivo:
+            continue
+
+        datas = re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", conteudo)
+        for data in datas:
+            data_fmt = _formatar_data_slash(data)
+            mapa[data_fmt] = nome_arquivo
+
+    return mapa
+
+
+def _preencher_anexo_aditivo_por_texto(aditivos: List[Dict[str, Any]], texto: str) -> List[Dict[str, Any]]:
+    mapa = _mapear_anexos_aditivos_por_texto(texto)
+
+    if not aditivos or not mapa:
+        return aditivos
+
+    for aditivo in aditivos:
+        anexo_atual = clean_text(aditivo.get("Anexo do aditivo"))
+        if _valor_informado(anexo_atual):
+            continue
+
+        datas_possiveis = [
+            clean_text(aditivo.get("Data do aditivo")),
+            clean_text(aditivo.get("Data da assinatura")),
+        ]
+
+        for data in datas_possiveis:
+            data_fmt = _formatar_data_slash(data)
+            if data_fmt in mapa:
+                aditivo["Anexo do aditivo"] = mapa[data_fmt]
+                break
+
+    return aditivos
+
+def normalizar_aditivos_contrato(aditivos: Any) -> List[Dict[str, Any]]:
+    """Padroniza aditivos vindos da IA para exibição em tabela executiva."""
+    if not isinstance(aditivos, list):
+        return []
+
+    def chave_norm(k: Any) -> str:
+        k = str(k or "").strip().lower()
+        k = html.unescape(k)
+        k = re.sub(r"[áàãâ]", "a", k)
+        k = re.sub(r"[éê]", "e", k)
+        k = re.sub(r"[í]", "i", k)
+        k = re.sub(r"[óôõ]", "o", k)
+        k = re.sub(r"[ú]", "u", k)
+        k = re.sub(r"[ç]", "c", k)
+        k = re.sub(r"[^a-z0-9]+", "_", k)
+        return k.strip("_")
+
+    def pegar(item_dict: Dict[str, Any], aliases: List[str], padrao: Any = "Não localizado") -> Any:
+        mapa = {chave_norm(k): v for k, v in item_dict.items()}
+        for alias in aliases:
+            nk = chave_norm(alias)
+            if nk in mapa and _valor_informado(mapa[nk]):
+                return mapa[nk]
+        return padrao
+
+    normalizados: List[Dict[str, Any]] = []
+
+    for idx, item in enumerate(aditivos, 1):
+        if isinstance(item, str):
+            item = {"objeto_escopo_aditivo": item}
+
+        if not isinstance(item, dict):
+            continue
+
+        # Se o aditivo já veio no padrão final da tabela, preserva os campos.
+        # Isso evita transformar "Anexo do aditivo", "Tipo do aditivo",
+        # "Impacto no valor" e "Status de validação" em "Não localizado".
+        if any(campo in item for campo in [
+            "Tipo do aditivo",
+            "Anexo do aditivo",
+            "Data do aditivo",
+            "Data de carga no robô",
+            "Data da assinatura",
+            "Quem assinou",
+            "Valor do aditivo",
+            "Impacto no valor",
+            "Impacto no prazo",
+            "Período do aditivo",
+            "Escopo do aditivo",
+            "Status de validação",
+        ]):
+            itens_norm = item.get("_itens_aditivo", [])
+            if not isinstance(itens_norm, list):
+                itens_norm = []
+
+            normalizados.append({
+                "Nº": clean_text(item.get("Nº") or item.get("numero_aditivo") or idx),
+                "Tipo do aditivo": clean_text(item.get("Tipo do aditivo")),
+                "Anexo do aditivo": clean_text(item.get("Anexo do aditivo")),
+                "Data do aditivo": clean_text(item.get("Data do aditivo")),
+                "Data de carga no robô": clean_text(item.get("Data de carga no robô")),
+                "Assinado": clean_text(item.get("Assinado")),
+                "Data da assinatura": clean_text(item.get("Data da assinatura")),
+                "Quem assinou": resumir_campo(item.get("Quem assinou"), 500),
+                "Valor do aditivo": clean_text(item.get("Valor do aditivo")),
+                "Impacto no valor": resumir_campo(item.get("Impacto no valor"), 500),
+                "Impacto no prazo": resumir_campo(item.get("Impacto no prazo"), 500),
+                "Período do aditivo": clean_text(item.get("Período do aditivo")),
+                "Escopo do aditivo": resumir_campo(item.get("Escopo do aditivo"), 600),
+                "Itens do aditivo": resumir_campo(item.get("Itens do aditivo"), 600),
+                "Status de validação": resumir_campo(item.get("Status de validação"), 500),
+                "Observações": resumir_campo(item.get("Observações"), 300),
+                "_itens_aditivo": normalizar_itens_contrato(itens_norm),
+            })
+            continue
+
+        itens_raw = pegar(item, [
+            "itens_aditivo", "itens_do_aditivo", "materiais_servicos_aditivo",
+            "materiais_e_servicos_aditivo", "itens", "servicos", "serviços"
+        ], [])
+
+        if not isinstance(itens_raw, list):
+            itens_raw = []
+
+        itens_norm = normalizar_itens_contrato(itens_raw)
+
+        def valor(alias_list, padrao="Não localizado"):
+            return clean_text(pegar(item, alias_list, padrao))
+
+        numero = valor(["numero_aditivo", "n_aditivo", "número_aditivo", "aditivo", "item"], str(idx))
+        tipo = valor(["tipo_aditivo", "tipo", "natureza", "categoria"], "Não localizado")
+        anexo = valor(["anexo_origem", "arquivo", "nome_arquivo", "documento", "fonte"], "Não localizado")
+        data_aditivo = valor(["data_aditivo", "data_do_aditivo", "data_documento", "data"], "Não localizado")
+        data_carga = valor(["data_carga_robo", "data_upload", "data_upload_aditivo", "data_carga"], "Não localizado")
+        assinado = valor(["assinado", "aditivo_assinado", "status_assinatura", "contrato_assinado"], "Não localizado")
+        data_assinatura = valor(["data_assinatura_aditivo", "data_da_assinatura", "data_assinatura"], "Não localizado")
+        assinantes = valor(["pessoas_que_assinaram_aditivo", "assinantes", "quem_assinou", "pessoas_que_assinaram"], "Não localizado")
+        valor_aditivo = valor(["valor_aditivo", "valor", "valor_total", "valor_alteracao", "valor_alteração"], "Não localizado")
+        impacto_valor = valor(["impacto_valor", "alteracao_valor", "alteração_valor", "efeito_valor"], "Não localizado")
+        impacto_prazo = valor(["impacto_prazo", "alteracao_prazo", "alteração_prazo", "efeito_prazo"], "Não localizado")
+        periodo = valor(["periodo_vigencia_aditivo", "período_vigencia_aditivo", "periodo", "vigencia"], "Não localizado")
+        escopo = valor(["objeto_escopo_aditivo", "escopo", "objeto", "descricao", "descrição"], "Não localizado")
+        status_validacao = valor(["status_validacao_aditivo", "status", "validacao", "validação"], "Não localizado")
+        observacoes = valor(["observacoes_aditivo", "observações_aditivo", "observacao", "observação"], "")
+
+        # Padroniza assinatura
+        low_ass = assinado.lower()
+        if any(t in low_ass for t in ["sim", "assinado", "completed", "concluído", "concluido"]):
+            assinado = "Sim"
+        elif any(t in low_ass for t in ["não", "nao", "sem assinatura", "pendente"]):
+            assinado = "Não"
+
+        valor_aditivo = _formatar_valor_monetario_item(valor_aditivo)
+
+        itens_resumo = "Não localizado"
+        if itens_norm:
+            partes = []
+            for it in itens_norm[:5]:
+                desc = clean_text(it.get("Descrição"))
+                vt = clean_text(it.get("Valor total"))
+                if _valor_informado(vt):
+                    partes.append(f"{desc}: {_formatar_valor_monetario_item(vt)}")
+                else:
+                    partes.append(desc)
+            itens_resumo = "; ".join(partes)
+            if len(itens_norm) > 5:
+                itens_resumo += f"; e mais {len(itens_norm) - 5} item(ns)."
+
+        # Se não tem nada útil, ignora
+        bloco_texto = " ".join([numero, tipo, anexo, data_aditivo, assinado, valor_aditivo, escopo])
+        if bloco_texto.replace("Não localizado", "").strip() == "":
+            continue
+
+        normalizados.append({
+            "Nº": numero,
+            "Tipo do aditivo": tipo,
+            "Anexo do aditivo": resumir_campo(anexo, 180),
+            "Data do aditivo": data_aditivo,
+            "Data de carga no robô": data_carga,
+            "Assinado": assinado,
+            "Data da assinatura": data_assinatura,
+            "Quem assinou": resumir_campo(assinantes, 260),
+            "Valor do aditivo": valor_aditivo,
+            "Impacto no valor": resumir_campo(impacto_valor, 240),
+            "Impacto no prazo": resumir_campo(impacto_prazo, 240),
+            "Período do aditivo": periodo,
+            "Escopo do aditivo": resumir_campo(escopo, 360),
+            "Itens do aditivo": resumir_campo(itens_resumo, 360),
+            "Status de validação": resumir_campo(status_validacao, 260),
+            "Observações": resumir_campo(observacoes, 260),
+            "_itens_aditivo": itens_norm,
+        })
+
+    return normalizados
+
+
+def _montar_resumo_aditivos(aditivos: List[Dict[str, Any]]) -> str:
+    aditivos = normalizar_aditivos_contrato(aditivos)
+
+    if not aditivos:
+        return "Nenhum aditivo identificado nos documentos analisados."
+
+    total = len(aditivos)
+    assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() == "SIM")
+    nao_assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() in ("NÃO", "NAO"))
+
+    resumo = f"{total} aditivo(s) identificado(s). {assinados} assinado(s)"
+
+    if nao_assinados:
+        resumo += f", {nao_assinados} sem assinatura localizada"
+
+    resumo += ". Sem valor global fixo; os aditivos analisados alteram valores unitários, percentuais, prazos ou quantidades."
+    resumo += " Consulte a tabela de aditivos para detalhes de anexo, assinatura, prazo, valor e itens."
+    return resumo
+
+
+def _normalizar_data_aditivo_para_br(valor: Any) -> str:
+    txt = clean_text(valor)
+
+    if not _valor_informado(txt):
+        return "Não localizado"
+
+    # Exemplo: 08 de setembro de 2023
+    convertido = _data_textual_para_br(txt)
+    if convertido != txt:
+        return convertido
+
+    # Exemplo: 08/09/2023 ou 9/24/2025
+    convertido = _formatar_data_slash(txt)
+    return convertido if _valor_informado(convertido) else txt
+
+
+def _extrair_blocos_arquivo_texto(texto: str) -> List[Dict[str, Any]]:
+    """
+    Quebra o texto extraído em blocos por ARQUIVO.
+    O robô monta o texto assim:
+    ARQUIVO: nome_do_arquivo.pdf
+    """
+    texto = str(texto or "")
+    blocos = []
+
+    partes = re.split(r"\n\s*ARQUIVO:\s*", texto, flags=re.IGNORECASE)
+
+    for parte in partes:
+        parte = str(parte or "").strip()
+        if not parte:
+            continue
+
+        linhas = parte.splitlines()
+        if not linhas:
+            continue
+
+        nome_arquivo = clean_text(linhas[0]).strip()
+        conteudo = "\n".join(linhas[1:]) if len(linhas) > 1 else parte
+
+        if not _valor_informado(nome_arquivo):
+            continue
+
+        blocos.append({
+            "arquivo": nome_arquivo,
+            "conteudo": conteudo,
+            "conteudo_low": conteudo.lower(),
+            "arquivo_low": nome_arquivo.lower(),
+        })
+
+    return blocos
+
+
+def _eh_bloco_aditivo(bloco: Dict[str, Any]) -> bool:
+    texto = f"{bloco.get('arquivo_low', '')} {bloco.get('conteudo_low', '')}"
+
+    termos = [
+        "aditivo",
+        "termo aditivo",
+        "aditamento",
+        "renovação",
+        "renovacao",
+        "prorrogação",
+        "prorrogacao",
+        "reajuste",
+        "alteração contratual",
+        "alteracao contratual",
+    ]
+
+    return any(t in texto for t in termos)
+
+
+def _datas_do_bloco_aditivo(bloco: Dict[str, Any]) -> List[str]:
+    conteudo = str(bloco.get("conteudo") or "")
+    datas = []
+
+    # Datas numéricas
+    for data in re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", conteudo):
+        datas.append(_normalizar_data_aditivo_para_br(data))
+
+    # Datas por extenso: 08 de setembro de 2023
+    for data in re.findall(
+        r"\b\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõ]+\s+de\s+\d{4}\b",
+        conteudo,
+        flags=re.IGNORECASE,
+    ):
+        datas.append(_normalizar_data_aditivo_para_br(data))
+
+    # Remove duplicados preservando ordem
+    saida = []
+    for d in datas:
+        if _valor_informado(d) and d not in saida:
+            saida.append(d)
+
+    return saida
+
+
+def _inferir_tipo_aditivo_por_bloco(bloco: Dict[str, Any]) -> str:
+    txt = f"{bloco.get('arquivo_low', '')} {bloco.get('conteudo_low', '')}"
+
+    if "reajuste" in txt:
+        return "Aditivo de reajuste"
+    if "prorrogação" in txt or "prorrogacao" in txt or "vigência" in txt or "vigencia" in txt:
+        return "Aditivo de prazo/vigência"
+    if "valor" in txt or "preço" in txt or "preco" in txt:
+        return "Aditivo de valor"
+    if "escopo" in txt or "objeto" in txt:
+        return "Aditivo de escopo"
+
+    return "Termo aditivo"
+
+
+def _inferir_impacto_valor_por_bloco(bloco: Dict[str, Any]) -> str:
+    txt = bloco.get("conteudo_low", "")
+
+    if "sem alteração de valor" in txt or "sem alteracao de valor" in txt:
+        return "Sem alteração de valor identificada."
+    if "reajuste" in txt:
+        return "Possui reajuste de valor. Validar o percentual/base no anexo do aditivo."
+    if "valor" in txt or "preço" in txt or "preco" in txt:
+        return "Possui menção a valor/preço. Validar o detalhe no anexo do aditivo."
+
+    return "Não localizado"
+
+
+def _inferir_impacto_prazo_por_bloco(bloco: Dict[str, Any]) -> str:
+    txt = bloco.get("conteudo_low", "")
+
+    if "prazo indeterminado" in txt:
+        return "Altera a vigência para prazo indeterminado."
+    if "prorrogação" in txt or "prorrogacao" in txt:
+        return "Prorroga o prazo/vigência do contrato."
+    if "vigência" in txt or "vigencia" in txt:
+        return "Possui alteração ou confirmação de vigência. Validar período no anexo."
+
+    return "Não localizado"
+
+
+def _inferir_valor_aditivo_por_bloco(bloco: Dict[str, Any]) -> str:
+    conteudo = str(bloco.get("conteudo") or "")
+
+    valores = re.findall(
+        r"R\$\s*[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}|R\$\s*[0-9]+(?:,[0-9]{2})?",
+        conteudo,
+        flags=re.IGNORECASE,
+    )
+
+    if valores:
+        return _formatar_valor_monetario_item(valores[0])
+
+    return "Não localizado"
+
+
+def _mapear_blocos_aditivos(texto: str) -> List[Dict[str, Any]]:
+    blocos = _extrair_blocos_arquivo_texto(texto)
+    aditivos = []
+
+    for bloco in blocos:
+        if not _eh_bloco_aditivo(bloco):
+            continue
+
+        aditivos.append({
+            "arquivo": bloco.get("arquivo"),
+            "datas": _datas_do_bloco_aditivo(bloco),
+            "tipo": _inferir_tipo_aditivo_por_bloco(bloco),
+            "impacto_valor": _inferir_impacto_valor_por_bloco(bloco),
+            "impacto_prazo": _inferir_impacto_prazo_por_bloco(bloco),
+            "valor": _inferir_valor_aditivo_por_bloco(bloco),
+            "conteudo_low": bloco.get("conteudo_low", ""),
+        })
+
+    return aditivos
+
+
+def _arquivos_aditivos_do_pacote(base: Dict[str, Any], texto: str) -> List[str]:
+    """Lista arquivos/anexos que parecem ser aditivos, usando arquivos_analisados e blocos ARQUIVO."""
+    nomes: List[str] = []
+
+    termos = [
+        "aditivo",
+        "termo aditivo",
+        "aditamento",
+        "renovação",
+        "renovacao",
+        "prorrogação",
+        "prorrogacao",
+        "reajuste",
+    ]
+
+    arquivos_base = clean_text(base.get("arquivos_analisados"))
+    if _valor_informado(arquivos_base):
+        for nome in re.split(r"\s*\|\s*", arquivos_base):
+            nome = clean_text(nome)
+            if _valor_informado(nome) and any(t in nome.lower() for t in termos):
+                if nome not in nomes:
+                    nomes.append(nome)
+
+    try:
+        for bloco in _extrair_blocos_arquivo_texto(texto):
+            nome = clean_text(bloco.get("arquivo"))
+            conteudo = clean_text(bloco.get("conteudo"))
+            plano = f"{nome} {conteudo}".lower()
+
+            if _valor_informado(nome) and any(t in plano for t in termos):
+                if nome not in nomes:
+                    nomes.append(nome)
+    except Exception:
+        pass
+
+    return nomes
+
+
+def _enriquecer_aditivos_por_anexo(
+    aditivos: List[Dict[str, Any]],
+    texto: str,
+    base: Dict[str, Any] | None = None
+) -> List[Dict[str, Any]]:
+    """
+    Preenche anexo, tipo, impacto, valor e status dos aditivos.
+    Primeiro tenta por data. Se não conseguir, usa os nomes dos arquivos de aditivos por ordem.
+    """
+    base = base or {}
+    blocos_aditivos = _mapear_blocos_aditivos(texto)
+    arquivos_pacote = _arquivos_aditivos_do_pacote(base, texto)
+
+    if not aditivos:
+        return aditivos
+
+    # 1. Tenta mapear por data encontrada no bloco do arquivo
+    for aditivo in aditivos:
+        data_aditivo = _normalizar_data_aditivo_para_br(aditivo.get("Data do aditivo"))
+        data_assinatura = _normalizar_data_aditivo_para_br(aditivo.get("Data da assinatura"))
+
+        for bloco in blocos_aditivos:
+            datas_bloco = bloco.get("datas", [])
+
+            if data_aditivo in datas_bloco or data_assinatura in datas_bloco:
+                if not _valor_informado(aditivo.get("Anexo do aditivo")):
+                    aditivo["Anexo do aditivo"] = bloco.get("arquivo", "Não localizado")
+
+                if not _valor_informado(aditivo.get("Tipo do aditivo")):
+                    aditivo["Tipo do aditivo"] = bloco.get("tipo", "Termo aditivo")
+
+                if not _valor_informado(aditivo.get("Impacto no valor")):
+                    aditivo["Impacto no valor"] = bloco.get("impacto_valor", "Não localizado")
+
+                if not _valor_informado(aditivo.get("Impacto no prazo")):
+                    aditivo["Impacto no prazo"] = bloco.get("impacto_prazo", "Não localizado")
+
+                if not _valor_informado(aditivo.get("Valor do aditivo")):
+                    aditivo["Valor do aditivo"] = bloco.get("valor", "Não localizado")
+
+                break
+
+    # 2. Se ainda não encontrou anexo, preenche por ordem usando os arquivos do pacote
+    if arquivos_pacote:
+        for idx, aditivo in enumerate(aditivos):
+            if idx >= len(arquivos_pacote):
+                break
+
+            if not _valor_informado(aditivo.get("Anexo do aditivo")):
+                aditivo["Anexo do aditivo"] = arquivos_pacote[idx]
+
+            if not _valor_informado(aditivo.get("Tipo do aditivo")):
+                nome_low = arquivos_pacote[idx].lower()
+
+                if "reajuste" in nome_low:
+                    aditivo["Tipo do aditivo"] = "Aditivo de reajuste"
+                elif "prorro" in nome_low or "vig" in nome_low:
+                    aditivo["Tipo do aditivo"] = "Aditivo de prazo/vigência"
+                elif "valor" in nome_low:
+                    aditivo["Tipo do aditivo"] = "Aditivo de valor"
+                else:
+                    aditivo["Tipo do aditivo"] = "Termo aditivo"
+
+    # 3. Status executivo
+    for aditivo in aditivos:
+        assinado = str(aditivo.get("Assinado", "")).strip().upper()
+
+        if assinado == "SIM":
+            aditivo["Status de validação"] = "Aditivo assinado. Validar anexo, escopo, prazo e impacto de valor antes de seguir."
+        elif assinado in ("NÃO", "NAO"):
+            aditivo["Status de validação"] = "Aditivo sem assinatura localizada. Revisar antes de considerar vigente."
+        else:
+            aditivo["Status de validação"] = "Assinatura do aditivo não localizada com clareza. Revisar documento."
+
+        if not _valor_informado(aditivo.get("Tipo do aditivo")):
+            aditivo["Tipo do aditivo"] = "Termo aditivo"
+
+        if not _valor_informado(aditivo.get("Escopo do aditivo")) and _valor_informado(aditivo.get("Anexo do aditivo")):
+            aditivo["Escopo do aditivo"] = f"Aditivo identificado no anexo {aditivo.get('Anexo do aditivo')}."
+
+    return aditivos
+
+def _info_util(valor: Any) -> bool:
+    """Retorna True somente quando o campo tem informação real."""
+    txt = clean_text(valor).strip().lower()
+
+    invalidos = {
+        "",
+        "none",
+        "null",
+        "n/a",
+        "na",
+        "-",
+        "não localizado",
+        "nao localizado",
+        "não localizada",
+        "nao localizada",
+        "não identificado",
+        "nao identificado",
+        "não identificada",
+        "nao identificada",
+        "não aplicável",
+        "nao aplicavel",
+    }
+
+    return txt not in invalidos
+
+
+def _normalizar_data_aditivo_para_br(valor: Any) -> str:
+    txt = clean_text(valor)
+
+    if not _info_util(txt):
+        return "Não localizado"
+
+    convertido = _data_textual_para_br(txt)
+    if convertido != txt and _info_util(convertido):
+        return convertido
+
+    convertido = _formatar_data_slash(txt)
+    return convertido if _info_util(convertido) else txt
+
+
+def _ordinal_aditivo_numero(texto: Any) -> int | None:
+    txt = clean_text(texto).lower()
+
+    mapa = {
+        "primeiro": 1,
+        "1º": 1,
+        "1°": 1,
+        "1o": 1,
+        "segundo": 2,
+        "2º": 2,
+        "2°": 2,
+        "2o": 2,
+        "terceiro": 3,
+        "3º": 3,
+        "3°": 3,
+        "3o": 3,
+        "quarto": 4,
+        "4º": 4,
+        "4°": 4,
+        "4o": 4,
+        "quinto": 5,
+        "5º": 5,
+        "5°": 5,
+        "5o": 5,
+    }
+
+    for chave, numero in mapa.items():
+        if chave in txt:
+            return numero
+
+    m = re.search(r"\b([1-9])\s*(?:º|°|o)?\s*(?:aditivo|aditamento)", txt, flags=re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    return None
+
+
+def _ordinal_aditivo_nome(numero: int | None) -> str:
+    nomes = {
+        1: "Primeiro Aditamento",
+        2: "Segundo Aditamento",
+        3: "Terceiro Aditamento",
+        4: "Quarto Aditamento",
+        5: "Quinto Aditamento",
+    }
+    return nomes.get(numero, "Termo aditivo")
+
+
+def _extrair_blocos_arquivo_texto(texto: str) -> List[Dict[str, Any]]:
+    """
+    Quebra o texto extraído em blocos por arquivo.
+    Esperado:
+    ARQUIVO: nome_do_arquivo.pdf
+    texto do arquivo...
+    """
+    texto = str(texto or "")
+    blocos: List[Dict[str, Any]] = []
+
+    partes = re.split(r"(?:^|\n)\s*ARQUIVO:\s*", texto, flags=re.IGNORECASE)
+
+    for parte in partes:
+        parte = str(parte or "").strip()
+        if not parte:
+            continue
+
+        linhas = parte.splitlines()
+        if not linhas:
+            continue
+
+        nome_arquivo = clean_text(linhas[0])
+        conteudo = "\n".join(linhas[1:]) if len(linhas) > 1 else ""
+
+        if not _info_util(nome_arquivo):
+            continue
+
+        blocos.append({
+            "arquivo": nome_arquivo,
+            "conteudo": conteudo,
+            "texto_completo": f"{nome_arquivo}\n{conteudo}",
+            "arquivo_low": nome_arquivo.lower(),
+            "conteudo_low": conteudo.lower(),
+        })
+
+    return blocos
+
+
+def _extrair_arquivos_analisados_base(base: Dict[str, Any]) -> List[str]:
+    nomes = []
+
+    bruto = clean_text(base.get("arquivos_analisados"))
+    if _info_util(bruto):
+        for parte in re.split(r"\s*\|\s*", bruto):
+            nome = clean_text(parte)
+            if _info_util(nome) and nome not in nomes:
+                nomes.append(nome)
+
+    return nomes
+
+
+def _eh_arquivo_aditivo(nome: Any, conteudo: Any = "") -> bool:
+    """
+    Identifica se o arquivo é realmente um aditivo.
+
+    Regra importante:
+    - Nome do arquivo manda.
+    - Contrato principal não pode virar aditivo só porque cita "Primeiro Aditivo" nos considerandos.
+    - Apresentação, comunicado, proposta/estudo e certificado isolado não viram aditivo.
+    """
+    nome_txt = clean_text(nome)
+    conteudo_txt = clean_text(conteudo)
+
+    nome_low = nome_txt.lower()
+    conteudo_inicio = conteudo_txt[:2500].lower()
+    plano = f"{nome_low} {conteudo_inicio}"
+
+    termos_excluir = [
+        "comunicado",
+        "apresentação",
+        "apresentacao",
+        "estudo de mercado",
+        "proposta",
+        "certificado de conclusão",
+        "certificado de conclusao",
+        "certificate of completion",
+    ]
+
+    if any(t in plano for t in termos_excluir):
+        return False
+
+    # Contrato principal não pode ser classificado como aditivo.
+    if (
+        "contrato" in nome_low
+        and "aditivo" not in nome_low
+        and "aditamento" not in nome_low
+        and "para_ass" not in nome_low
+    ):
+        return False
+
+    # Prioridade: nome do arquivo.
+    if "aditivo" in nome_low or "aditamento" in nome_low:
+        return True
+
+    # Fallback: título do documento no começo do texto.
+    padrao_titulo = re.search(
+        r"\b(primeiro|segundo|terceiro|quarto|quinto|\d+\s*[º°o]?)\s+aditamento\b",
+        conteudo_inicio,
+        flags=re.IGNORECASE,
+    )
+
+    if padrao_titulo:
+        return True
+
+    return False
+
+
+def _pontuar_bloco_aditivo(bloco: Dict[str, Any]) -> int:
+    """
+    Pontua versões do mesmo aditivo.
+    Objetivo: escolher o melhor anexo.
+    PDF assinado/com certificado > PDF com DocuSign > PDF final > DOCX/minuta.
+    """
+    nome = clean_text(bloco.get("arquivo"))
+    conteudo = clean_text(bloco.get("conteudo"))
+    nome_low = nome.lower()
+    plano = f"{nome} {conteudo}".lower()
+
+    pontos = 0
+
+    if "aditivo" in nome_low or "aditamento" in nome_low:
+        pontos += 300
+
+    if nome_low.endswith(".pdf"):
+        pontos += 250
+
+    if "para_ass" in nome_low or "assinado" in nome_low or "(assinado)" in nome_low:
+        pontos += 300
+
+    if "docusign envelope id" in plano:
+        pontos += 180
+
+    if "certificate of completion" in plano or "certificado de conclusão" in plano or "certificado de conclusao" in plano:
+        pontos += 250
+
+    if "status: completed" in plano or "status: concluído" in plano or "status: concluido" in plano:
+        pontos += 250
+
+    if nome_low.endswith(".docx"):
+        pontos -= 180
+
+    if "rev" in nome_low or "minuta" in nome_low or "rascunho" in nome_low:
+        pontos -= 120
+
+    if "comunicado" in nome_low or "apresentação" in nome_low or "apresentacao" in nome_low:
+        pontos -= 300
+
+    if "contrato" in nome_low and "aditivo" not in nome_low and "aditamento" not in nome_low:
+        pontos -= 500
+
+    return pontos
+
+
+def _extrair_envelope_id(texto: Any) -> str:
+    txt = clean_text(texto)
+
+    m = re.search(
+        r"(?:Docusign Envelope ID|DocuSign Envelope ID|Envelope Id|Envelope ID|Identificação de envelope):?\s*([A-Z0-9\-]{20,})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+
+    if m:
+        return re.sub(r"[^A-Z0-9]", "", m.group(1).upper())
+
+    return ""
+
+
+def _montar_mapa_certificados_por_envelope(texto: str) -> Dict[str, str]:
+    mapa: Dict[str, str] = {}
+
+    for bloco in _extrair_blocos_arquivo_texto(texto):
+        conteudo = bloco.get("texto_completo", "")
+        nome = clean_text(bloco.get("arquivo"))
+        plano = f"{nome} {conteudo}".lower()
+
+        if "certificado de conclusão" not in plano and "certificate of completion" not in plano:
+            continue
+
+        env = _extrair_envelope_id(conteudo)
+        if env:
+            mapa[env] = conteudo
+
+    return mapa
+
+
+def _datas_encontradas(texto: Any) -> List[str]:
+    txt = str(texto or "")
+    datas = []
+
+    for data in re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", txt):
+        d = _normalizar_data_aditivo_para_br(data)
+        if _info_util(d) and d not in datas:
+            datas.append(d)
+
+    for data in re.findall(
+        r"\b\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõÁÉÍÓÚÂÊÔÕ]+\s+de\s+\d{4}\b",
+        txt,
+        flags=re.IGNORECASE,
+    ):
+        d = _normalizar_data_aditivo_para_br(data)
+        if _info_util(d) and d not in datas:
+            datas.append(d)
+
+    return datas
+
+
+def _extrair_data_documento_aditivo(conteudo: Any) -> str:
+    txt = str(conteudo or "")
+
+    padroes = [
+        r"(?:Atibaia|Jarinu|São Paulo\/SP|São Paulo|Sao Paulo\/SP|Sao Paulo),?\s*(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõÁÉÍÓÚÂÊÔÕ]+\s+de\s+\d{4})",
+        r"(?:Atibaia|Jarinu|São Paulo\/SP|São Paulo|Sao Paulo\/SP|Sao Paulo),?\s*(\d{1,2}/\d{1,2}/\d{4})",
+    ]
+
+    for padrao in padroes:
+        achados = re.findall(padrao, txt, flags=re.IGNORECASE)
+        if achados:
+            return _normalizar_data_aditivo_para_br(achados[-1])
+
+    datas = _datas_encontradas(txt)
+    if datas:
+        return datas[0]
+
+    return "Não localizado"
+
+
+def _extrair_data_assinatura_docusign(conteudo: Any) -> str:
+    txt = str(conteudo or "")
+
+    padroes_conclusao = [
+        r"(?:Concluído|Concluido|Completed).*?(\d{1,2}/\d{1,2}/\d{4})",
+        r"(?:Signing Complete|Assinatura concluída|Assinatura concluida).*?(\d{1,2}/\d{1,2}/\d{4})",
+    ]
+
+    for padrao in padroes_conclusao:
+        achados = re.findall(padrao, txt, flags=re.IGNORECASE | re.DOTALL)
+        if achados:
+            return _normalizar_data_aditivo_para_br(achados[-1])
+
+    assinaturas = re.findall(
+        r"(?:Assinado|Signed):\s*(\d{1,2}/\d{1,2}/\d{4})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+
+    if assinaturas:
+        return _normalizar_data_aditivo_para_br(assinaturas[-1])
+
+    return "Não localizado"
+
+
+def _extrair_signatarios_docusign(conteudo: Any) -> str:
+    txt = str(conteudo or "")
+    nomes = []
+
+    linhas = [clean_text(l) for l in txt.splitlines() if clean_text(l)]
+
+    ignorar = {
+        "signer events",
+        "eventos do signatário",
+        "eventos do signatario",
+        "assinatura",
+        "registro de hora e data",
+        "security level",
+        "nível de segurança",
+        "nivel de seguranca",
+        "using ip address",
+        "usando endereço ip",
+        "sent:",
+        "enviado:",
+        "viewed:",
+        "visualizado:",
+        "signed:",
+        "assinado:",
+        "electronic record and signature disclosure",
+        "termos de assinatura e registro eletrônico",
+        "not offered via docusign",
+        "accepted:",
+        "aceito:",
+    }
+
+    for i, linha in enumerate(linhas):
+        low = linha.lower()
+
+        if "@" in linha:
+            # normalmente o nome está na linha anterior
+            if i > 0:
+                nome = linhas[i - 1]
+                nome_low = nome.lower()
+
+                if (
+                    _info_util(nome)
+                    and "@" not in nome
+                    and not any(t in nome_low for t in ignorar)
+                    and not re.search(r"\d{1,2}/\d{1,2}/\d{4}", nome)
+                    and nome not in nomes
+                ):
+                    nomes.append(nome)
+
+    if nomes:
+        return "; ".join(nomes)
+
+    return "Não localizado"
+
+
+def _extrair_periodo_aditivo(conteudo: Any) -> str:
+    txt = clean_text(conteudo)
+
+    m = re.search(
+        r"(?:aplicad[oa]s?\s+a\s+partir\s+de|a partir de)\s+(\d{1,2}/\d{1,2}/\d{4}).{0,100}?(?:até|ate)\s+(\d{1,2}/\d{1,2}/\d{4})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return f"{_normalizar_data_aditivo_para_br(m.group(1))} até {_normalizar_data_aditivo_para_br(m.group(2))}"
+
+    m = re.search(
+        r"Quadro\s+4.*?aplicad[oa]s?\s+a\s+partir\s+de\s+(\d{1,2}/\d{1,2}/\d{4})\s+até\s+(\d{1,2}/\d{1,2}/\d{4})",
+        txt,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        return f"{_normalizar_data_aditivo_para_br(m.group(1))} até {_normalizar_data_aditivo_para_br(m.group(2))}"
+
+    m = re.search(
+        r"(?:efeitos\s+retroagem\s+a|retroagem\s+a)\s+(\d{1,2}/\d{1,2}/\d{4})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return f"A partir de {_normalizar_data_aditivo_para_br(m.group(1))}"
+
+    m = re.search(
+        r"(?:efeitos\s+retroagem\s+a|retroagem\s+a)\s+(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõÁÉÍÓÚÂÊÔÕ]+\s+de\s+\d{4})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return f"A partir de {_normalizar_data_aditivo_para_br(m.group(1))}"
+
+    m = re.search(
+        r"(?:aplicad[oa]s?\s+a\s+partir\s+de|a partir de)\s+(\d{1,2}/\d{1,2}/\d{4})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return f"A partir de {_normalizar_data_aditivo_para_br(m.group(1))}"
+
+    m = re.search(
+        r"vigência\s+pelo\s+prazo\s+de\s+(\d+)\s*\([^)]*\)?\s*mes(?:es)?[^.]{0,120}?a\s+partir\s+de\s+(\d{1,2}\s+de\s+[A-Za-zçÇãáéíóúâêôõÁÉÍÓÚÂÊÔÕ]+\s+de\s+\d{4})",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        meses = int(m.group(1))
+        inicio = _parse_data_br_para_datetime(_normalizar_data_aditivo_para_br(m.group(2)))
+        if inicio:
+            fim = _somar_meses(inicio, meses) - timedelta(days=1)
+            return f"{inicio.strftime('%d/%m/%Y')} até {fim.strftime('%d/%m/%Y')}"
+
+    return "Não localizado"
+
+
+def _extrair_itens_aditivo_bbp(conteudo: Any) -> List[Dict[str, Any]]:
+    txt = clean_text(conteudo)
+    itens = []
+
+    servicos_valores = [
+        ("Refeição (Almoço ou Jantar)", r"Refeição\s*\(Almoço\s+ou\s+Jantar\)\s+([0-9]{1,3},[0-9]{2})\s+([0-9]{1,3},[0-9]{2})"),
+        ("Refeição Ceia", r"Refeição\s+Ceia\s+([0-9]{1,3},[0-9]{2})\s+([0-9]{1,3},[0-9]{2})"),
+        ("Desjejum", r"Desjejum.*?([0-9]{1,3},[0-9]{2})\s+([0-9]{1,3},[0-9]{2})"),
+    ]
+
+    for desc, padrao in servicos_valores:
+        m = re.search(padrao, txt, flags=re.IGNORECASE)
+        if m:
+            itens.append({
+                "Item": len(itens) + 1,
+                "Descrição": desc,
+                "Tipo": "Serviço",
+                "Quantidade": "1",
+                "Unidade": "UN",
+                "Valor unitário": f"R$ {m.group(1)}",
+                "Valor total": f"R$ {m.group(1)}",
+                "Taxa / Percentual": f"Domingos/Feriados: R$ {m.group(2)}",
+                "Total de encargos": "Não aplicável",
+                "Fonte": "Aditivo",
+            })
+
+    quantidades = [
+        ("Desjejum", r"Desjejum\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2}\s+(\d+)"),
+        ("Almoço", r"Almoço\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2}\s+(\d+)"),
+        ("Lanche da Tarde", r"Lanche\s+da\s+Tarde\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2}\s+(\d+)"),
+        ("Jantar", r"Jantar\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2}\s+(\d+)"),
+        ("Ceia", r"Ceia\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2}\s+(\d+)"),
+    ]
+
+    for desc, padrao in quantidades:
+        m = re.search(padrao, txt, flags=re.IGNORECASE)
+        if m:
+            itens.append({
+                "Item": len(itens) + 1,
+                "Descrição": desc,
+                "Tipo": "Serviço",
+                "Quantidade": m.group(1),
+                "Unidade": "REF/DIA",
+                "Valor unitário": "Não localizado",
+                "Valor total": "Não localizado",
+                "Taxa / Percentual": "Quantidade mínima diária",
+                "Total de encargos": "Não aplicável",
+                "Fonte": "Aditivo",
+            })
+
+    return itens
+
+
+def _inferir_impacto_valor_aditivo(conteudo: Any, numero: int | None = None) -> str:
+    txt = clean_text(conteudo).lower()
+
+    if numero == 1:
+        return "Altera a cláusula 10 e o Quadro 4 de valores do fornecimento por refeição."
+
+    if numero == 2:
+        return "Reajusta os valores unitários das refeições para o período de 01/08/2024 a 31/07/2025."
+
+    if numero == 3:
+        return "Sem valor específico localizado; altera quantidade mínima/escopo operacional."
+
+    if numero == 4:
+        return "Ajuste de valores por alteração de ICMS de 3,20% para 4,00%."
+
+    if numero == 5:
+        return "Reajuste anual de 7,31% sobre o Quadro 4 de valores do fornecimento por refeição."
+
+    if "7,31%" in txt:
+        return "Reajuste anual de 7,31% sobre o Quadro 4 de valores do fornecimento por refeição."
+
+    if "6,5%" in txt or "6,50%" in txt:
+        return "Reajuste dos valores unitários das refeições."
+
+    if "icms" in txt and ("3,20%" in txt or "4,00%" in txt):
+        return "Ajuste de valores por alteração de ICMS de 3,20% para 4,00%."
+
+    if "quadro 4" in txt and "valores" in txt:
+        return "Altera o Quadro 4 de valores do fornecimento por refeição."
+
+    if "quadro 3" in txt and "quantidades mínimas" in txt:
+        return "Sem valor específico localizado; altera quantidade mínima/escopo operacional."
+
+    return "Sem valor global fixo."
+
+
+def _valor_aditivo_profissional(numero: int | None, conteudo: Any, itens: List[Dict[str, Any]]) -> str:
+    """
+    Valor do aditivo não é valor global.
+    Estes aditivos alteram valores unitários, percentuais ou quantidades.
+    """
+    txt = clean_text(conteudo).lower()
+
+    if numero == 3:
+        return "Não aplicável (alteração de quantidade)."
+
+    if numero == 5:
+        return "Sem valor global fixo; reajuste de 7,31%."
+
+    if numero in (1, 2, 4):
+        return "Sem valor global fixo; possui valores unitários por refeição."
+
+    if "7,31%" in txt:
+        return "Sem valor global fixo; reajuste de 7,31%."
+
+    if itens:
+        return "Sem valor global fixo; possui valores unitários por refeição."
+
+    return "Sem valor global fixo."
+
+def _inferir_impacto_prazo_aditivo(conteudo: Any) -> str:
+    txt = clean_text(conteudo).lower()
+
+    periodo = _extrair_periodo_aditivo(conteudo)
+    if _info_util(periodo):
+        return f"Define período de aplicação: {periodo}."
+
+    if "vigência pelo prazo de 12" in txt or "vigencia pelo prazo de 12" in txt:
+        return "Define vigência de 12 meses para o aditivo."
+
+    if "prazo indeterminado" in txt:
+        return "Mantém/indica vigência por prazo indeterminado."
+
+    if "retroagem a" in txt or "efeitos retroagem" in txt:
+        return "Possui efeitos retroativos conforme data indicada no aditivo."
+
+    return "Não localizado"
+
+
+def _inferir_escopo_aditivo(numero: int | None, conteudo: Any) -> str:
+    txt = clean_text(conteudo).lower()
+
+    if numero == 1:
+        return "Altera a cláusula de cessão/transferência e o Quadro 4 de valores do fornecimento por refeição."
+
+    if numero == 2:
+        return "Altera o Quadro 4 de valores do fornecimento por refeição, com aplicação a partir de 01/08/2024."
+
+    if numero == 3:
+        return "Altera o Quadro 3 de quantidades mínimas diárias e inclui o serviço Lanche da Tarde."
+
+    if numero == 4:
+        return "Ajusta o Quadro 4 de valores em razão da alteração da alíquota de ICMS."
+
+    if numero == 5:
+        return "Altera o Quadro 4 de valores do fornecimento por refeição, com reajuste anual e vigência de 12 meses."
+
+    if "quadro 3" in txt and "lanche da tarde" in txt:
+        return "Altera quantidades mínimas diárias e inclui Lanche da Tarde."
+
+    if "quadro 4" in txt and "valores" in txt:
+        return "Altera valores do fornecimento por refeição."
+
+    return "Aditivo identificado nos documentos analisados."
+
+
+def _montar_status_aditivo(aditivo: Dict[str, Any]) -> str:
+    assinado = clean_text(aditivo.get("Assinado")).upper()
+    anexo = aditivo.get("Anexo do aditivo")
+    escopo = aditivo.get("Escopo do aditivo")
+
+    if assinado == "SIM" and _info_util(anexo) and _info_util(escopo):
+        return "Aditivo assinado e identificado com anexo/escopo. Validar impactos antes de seguir."
+
+    if assinado == "SIM":
+        return "Aditivo assinado. Revisar campos não localizados para confirmação operacional."
+
+    if assinado in ("NÃO", "NAO"):
+        return "Aditivo sem assinatura localizada. Não considerar vigente sem validação."
+
+    return "Assinatura do aditivo não localizada com clareza. Revisar documento."
+
+
+def _criar_aditivos_pelos_blocos(base: Dict[str, Any], texto: str) -> List[Dict[str, Any]]:
+    blocos = _extrair_blocos_arquivo_texto(texto)
+    certificados = _montar_mapa_certificados_por_envelope(texto)
+
+    candidatos = []
+
+    for bloco in blocos:
+        nome = clean_text(bloco.get("arquivo"))
+        conteudo = bloco.get("conteudo", "")
+        texto_completo = bloco.get("texto_completo", "")
+
+        if not _eh_arquivo_aditivo(nome, conteudo):
+            continue
+
+        # Prioriza o número do aditivo pelo NOME DO ARQUIVO.
+        # Só usa o conteúdo como fallback, para evitar o contrato principal virar 1º aditivo.
+        numero = _ordinal_aditivo_numero(nome)
+
+        if not numero:
+            numero = _ordinal_aditivo_numero(str(conteudo)[:2500])
+
+        if not numero:
+            continue
+
+        env = _extrair_envelope_id(texto_completo)
+        conteudo_certificado = certificados.get(env, "")
+        conteudo_enriquecido = f"{texto_completo}\n{conteudo_certificado}"
+
+        candidatos.append({
+            "numero": numero,
+            "arquivo": nome,
+            "conteudo": conteudo_enriquecido,
+            "pontos": _pontuar_bloco_aditivo(bloco),
+        })
+
+    # Se não tiver blocos ARQUIVO, tenta pelo nome dos arquivos analisados
+    if not candidatos:
+        for nome in _extrair_arquivos_analisados_base(base):
+            if not _eh_arquivo_aditivo(nome, ""):
+                continue
+
+            numero = _ordinal_aditivo_numero(nome)
+            if not numero:
+                continue
+
+            candidatos.append({
+                "numero": numero,
+                "arquivo": nome,
+                "conteudo": nome,
+                "pontos": 50,
+            })
+
+    melhor_por_numero: Dict[int, Dict[str, Any]] = {}
+
+    for cand in candidatos:
+        numero = cand["numero"]
+        atual = melhor_por_numero.get(numero)
+
+        if not atual or cand["pontos"] > atual["pontos"]:
+            melhor_por_numero[numero] = cand
+
+    aditivos = []
+
+    data_carga = base.get("data_analise")
+    if not _info_util(data_carga):
+        data_carga = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    for numero in sorted(melhor_por_numero):
+        cand = melhor_por_numero[numero]
+        conteudo = cand["conteudo"]
+        nome = cand["arquivo"]
+
+        data_aditivo = _extrair_data_documento_aditivo(conteudo)
+        data_assinatura = _extrair_data_assinatura_docusign(conteudo)
+        assinantes = _extrair_signatarios_docusign(conteudo)
+        periodo = _extrair_periodo_aditivo(conteudo)
+        impacto_valor = _inferir_impacto_valor_aditivo(conteudo, numero)
+        impacto_prazo = _inferir_impacto_prazo_aditivo(conteudo)
+        escopo = _inferir_escopo_aditivo(numero, conteudo)
+        itens = _extrair_itens_aditivo_bbp(conteudo)
+
+        assinado = "Sim" if (
+            _info_util(data_assinatura)
+            or "docusign envelope id" in clean_text(conteudo).lower()
+            or "certificate of completion" in clean_text(conteudo).lower()
+            or "certificado de conclusão" in clean_text(conteudo).lower()
+            or "assinado" in clean_text(nome).lower()
+            or "para_ass" in clean_text(nome).lower()
+        ) else "Não"
+
+        valor_aditivo = _valor_aditivo_profissional(numero, conteudo, itens)
+
+        aditivo = {
+            "Nº": str(numero),
+            "Tipo do aditivo": _ordinal_aditivo_nome(numero),
+            "Anexo do aditivo": nome,
+            "Data do aditivo": data_aditivo,
+            "Data de carga no robô": data_carga,
+            "Assinado": assinado,
+            "Data da assinatura": data_assinatura,
+            "Quem assinou": resumir_campo(assinantes, 500),
+            "Valor do aditivo": valor_aditivo,
+            "Impacto no valor": impacto_valor,
+            "Impacto no prazo": impacto_prazo,
+            "Período do aditivo": periodo,
+            "Escopo do aditivo": escopo,
+            "Itens do aditivo": resumir_campo("; ".join([
+                f"{i.get('Descrição')}: {i.get('Valor unitário')}" for i in itens
+            ]) if itens else "Não localizado", 600),
+            "Status de validação": "Não localizado",
+            "Observações": "",
+            "_itens_aditivo": itens,
+        }
+
+        aditivo["Status de validação"] = _montar_status_aditivo(aditivo)
+        aditivos.append(aditivo)
+
+    return aditivos
+
+
+def _numero_aditivo_para_merge(aditivo: Dict[str, Any], fallback: int | None = None) -> str:
+    numero = clean_text(
+        aditivo.get("Nº")
+        or aditivo.get("numero_aditivo")
+        or aditivo.get("numero")
+        or aditivo.get("aditivo")
+        or ""
+    )
+
+    m = re.search(r"\b([1-9])\b", numero)
+    if m:
+        return m.group(1)
+
+    numero_inferido = _ordinal_aditivo_numero(
+        " ".join([
+            clean_text(aditivo.get("Tipo do aditivo")),
+            clean_text(aditivo.get("Anexo do aditivo")),
+            clean_text(aditivo.get("Escopo do aditivo")),
+            clean_text(aditivo.get("objeto_escopo_aditivo")),
+            clean_text(aditivo.get("tipo_aditivo")),
+            clean_text(aditivo.get("anexo_origem")),
+        ])
+    )
+
+    if numero_inferido:
+        return str(numero_inferido)
+
+    return str(fallback or "")
+
+
+def _mesclar_aditivos_ia_com_blocos(
+    aditivos_ia: List[Dict[str, Any]],
+    aditivos_blocos: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Fonte principal = arquivos/blocos reais.
+    A IA só complementa campos vazios.
+    Isso evita trocar o anexo do 1º aditivo pelo contrato principal ou priorizar DOCX sobre PDF assinado.
+    """
+    mapa: Dict[str, Dict[str, Any]] = {}
+
+    # 1. Arquivos reais têm prioridade
+    for idx, aditivo_bloco in enumerate(aditivos_blocos, 1):
+        numero = _numero_aditivo_para_merge(aditivo_bloco, idx)
+        if not numero:
+            numero = str(idx)
+
+        aditivo_bloco["Nº"] = numero
+        mapa[numero] = dict(aditivo_bloco)
+
+    # 2. IA só complementa o que estiver vazio
+    for idx, aditivo_ia in enumerate(aditivos_ia, 1):
+        numero = _numero_aditivo_para_merge(aditivo_ia, idx)
+        if not numero:
+            numero = str(idx)
+
+        if numero not in mapa:
+            aditivo_ia["Nº"] = numero
+            mapa[numero] = dict(aditivo_ia)
+            continue
+
+        existente = mapa[numero]
+
+        for campo, valor in aditivo_ia.items():
+            if not _info_util(existente.get(campo)) and _info_util(valor):
+                existente[campo] = valor
+
+        existente["Nº"] = numero
+        existente["Status de validação"] = _montar_status_aditivo(existente)
+        mapa[numero] = existente
+
+    def ordem(item):
+        try:
+            return int(item[0])
+        except Exception:
+            return 999
+
+    return [v for _, v in sorted(mapa.items(), key=ordem)]
+
+
+def aplicar_regras_aditivos(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
+    """Consolida aditivos usando IA + leitura determinística dos arquivos/anexos."""
+    texto = str(texto or "")
+
+    aditivos_ia = []
+    if isinstance(base.get("aditivos_contrato"), list):
+        aditivos_ia = normalizar_aditivos_contrato(base.get("aditivos_contrato"))
+
+    for chave in ["aditivos", "aditivos_identificados", "termos_aditivos", "lista_aditivos"]:
+        if not aditivos_ia and isinstance(base.get(chave), list):
+            aditivos_ia = normalizar_aditivos_contrato(base.get(chave))
+
+    aditivos_blocos = _criar_aditivos_pelos_blocos(base, texto)
+
+    aditivos = _mesclar_aditivos_ia_com_blocos(aditivos_ia, aditivos_blocos)
+
+    # Se não conseguiu pelos blocos, mantém IA, mas corrige campos "Não localizado"
+    if not aditivos:
+        aditivos = aditivos_ia
+
+    data_carga = base.get("data_analise")
+    if not _info_util(data_carga):
+        data_carga = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    for aditivo in aditivos:
+        if not _info_util(aditivo.get("Data de carga no robô")):
+            aditivo["Data de carga no robô"] = data_carga
+
+        if _info_util(aditivo.get("Data do aditivo")):
+            aditivo["Data do aditivo"] = _normalizar_data_aditivo_para_br(aditivo.get("Data do aditivo"))
+
+        if _info_util(aditivo.get("Data da assinatura")):
+            aditivo["Data da assinatura"] = _normalizar_data_aditivo_para_br(aditivo.get("Data da assinatura"))
+
+        if not _info_util(aditivo.get("Status de validação")):
+            aditivo["Status de validação"] = _montar_status_aditivo(aditivo)
+
+    base["aditivos_contrato"] = aditivos
+    base["resumo_aditivos"] = _montar_resumo_aditivos(aditivos)
+
+    return base
 
 def extrair_itens_local(texto: str, limite: int = 120) -> List[Dict[str, Any]]:
     """Fallback para propostas/orçamentos com tabela."""
@@ -1382,6 +2796,8 @@ def local_extract(texto: str) -> Dict[str, Any]:
         "multa": multa,
         "vigencia_apos_assinatura": vigencia,
         "periodo_vigencia_formatado": "Não localizado",
+        "resumo_aditivos": "Nenhum aditivo identificado nos documentos analisados.",
+        "aditivos_contrato": [],
         "rescisao_indenizacao": rescisao,
         "anticorrupcao": anticorrupcao,
         "indice_reajuste_anual": reajuste,
@@ -1473,6 +2889,7 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Multa = multa
 - Vigência após a data de assinatura = vigencia_apos_assinatura
 - Período de Vigência = periodo_vigencia_formatado
+- Resumo de Aditivos = resumo_aditivos
 - Rescisão e Indenização = rescisao_indenizacao
 - Anticorrupção = anticorrupcao
 - Proteção de Dados LGPD = protecao_dados_lgpd
@@ -1506,6 +2923,45 @@ Para propostas de mão de obra temporária ou serviço sem preço unitário em R
 - Preencha total_encargos com o percentual/total de encargos, exemplo "59,08%".
 - Preencha vencimento com o prazo de pagamento, exemplo "30 dias após emissão da nota fiscal".
 - Deixe valor_unitario e valor_total como "Não localizado" quando não houver valor em R$.
+
+TABELA DE ADITIVOS OBRIGATÓRIA
+Também retorne a chave aditivos_contrato como lista.
+
+Cada aditivo identificado deve conter:
+- numero_aditivo
+- tipo_aditivo
+- anexo_origem
+- data_aditivo
+- data_carga_robo
+- assinado
+- data_assinatura_aditivo
+- pessoas_que_assinaram_aditivo
+- valor_aditivo
+- impacto_valor
+- impacto_prazo
+- periodo_vigencia_aditivo
+- objeto_escopo_aditivo
+- itens_aditivo
+- status_validacao_aditivo
+- observacoes_aditivo
+
+Regras para aditivos:
+1. Identifique todos os documentos que sejam termo aditivo, aditamento, alteração contratual, renovação, prorrogação, reajuste, alteração de escopo, alteração de valor ou quitação.
+2. anexo_origem deve trazer o nome do arquivo/anexo onde o aditivo foi identificado.
+3. data_aditivo deve ser a data textual do termo aditivo, se houver.
+4. data_carga_robo deve ser preenchida como "Data de carga no robô" quando não existir data de upload no documento.
+5. assinado deve retornar "Sim" quando houver assinatura, DocuSign Completed, certificado de conclusão ou evidência de assinatura das partes.
+6. Se não houver assinatura localizada no aditivo, retorne "Não".
+7. pessoas_que_assinaram_aditivo deve listar os signatários do aditivo, separados por ponto e vírgula.
+8. valor_aditivo deve trazer o valor específico do aditivo, se houver.
+9. impacto_valor deve explicar se o aditivo aumenta valor, reduz valor, mantém valor, reajusta valor ou não altera valor.
+10. impacto_prazo deve explicar se prorroga, reduz, mantém ou encerra prazo.
+11. periodo_vigencia_aditivo deve trazer o período do aditivo quando houver, exemplo: "Início 01/01/2026 até 31/12/2026".
+12. objeto_escopo_aditivo deve resumir o que o aditivo altera.
+13. itens_aditivo deve trazer materiais/serviços específicos do aditivo, quando houver, usando a mesma estrutura de itens_contrato.
+14. status_validacao_aditivo deve trazer uma visão executiva, exemplo: "Aditivo assinado e válido", "Aditivo sem assinatura localizada", "Aditivo com valor, porém sem evidência de assinatura".
+15. resumo_aditivos deve resumir a situação geral dos aditivos encontrados em até 2 linhas.
+16. Se não houver aditivos nos documentos analisados, retorne aditivos_contrato como lista vazia [] e resumo_aditivos como "Nenhum aditivo identificado nos documentos analisados."
 
 REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 1. Não invente dados. Se não encontrar, retorne "Não localizado".
@@ -2473,21 +3929,22 @@ def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
 
     # Mantém os cards com resumo executivo: detalhado o suficiente, sem virar cláusula inteira.
     limites = {
-        "objetivo": 260,
-        "descricao_servico_material": 360,
-        "descricao_breve_cadastro": 180,
-        "forma_pagamento": 240,
-        "condicao_pagamento_dias": 160,
-        "multa": 260,
-        "vigencia_apos_assinatura": 280,
-        "rescisao_indenizacao": 340,
-        "anticorrupcao": 300,
-        "protecao_dados_lgpd": 320,
-        "alerta_assinatura": 220,
-        "valor_contrato_original": 420,
-        "valor_mensal_estimado": 520,
-        "valor_total_estimado_vigencia": 520,
-        "valor_total_materiais_servicos": 650,
+        "objetivo": 900,
+        "descricao_servico_material": 1200,
+        "descricao_breve_cadastro": 500,
+        "forma_pagamento": 700,
+        "condicao_pagamento_dias": 400,
+        "multa": 900,
+        "vigencia_apos_assinatura": 900,
+        "resumo_aditivos": 900,
+        "rescisao_indenizacao": 1200,
+        "anticorrupcao": 900,
+        "protecao_dados_lgpd": 900,
+        "alerta_assinatura": 500,
+        "valor_contrato_original": 900,
+        "valor_mensal_estimado": 900,
+        "valor_total_estimado_vigencia": 900,
+        "valor_total_materiais_servicos": 900,
     }
     for campo, limite in limites.items():
         base[campo] = resumir_campo(base.get(campo), limite)
@@ -2569,6 +4026,7 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
         base["itens_contrato"] = extrair_itens_local(str(texto_fallback or ""))
 
     base = aplicar_regras_finais_contrato(base, str(texto_fallback or ""))
+    base = aplicar_regras_aditivos(base, str(texto_fallback or ""))
 
     for lista in ["checklist", "pendencias"]:
         for item in base.get(lista, []):
@@ -2778,6 +4236,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     pendencias_lista = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
     checklist_lista = resultado.get("checklist", []) if isinstance(resultado.get("checklist"), list) else []
     itens_lista = normalizar_itens_contrato(resultado.get("itens_contrato", []))
+    aditivos_lista = normalizar_aditivos_contrato(resultado.get("aditivos_contrato", []))
 
     contraparte = v("contraparte", v("fornecedor"))
     cnpj_contraparte = v("cnpj_contraparte", v("cnpj"))
@@ -2825,6 +4284,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
         ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
+        ("Resumo de Aditivos", v("resumo_aditivos")),
         ("Modelo IA", modelo_ia),
     ], row_height=30)
     row = _section(ws, row + 1, "Parecer Automático")
@@ -2895,6 +4355,68 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     _write_dataframe_table(ws, 5, itens_df, {
         "A": 10, "B": 52, "C": 15, "D": 14, "E": 14, "F": 18, "G": 18, "H": 22
     }, 44)
+
+        # ADITIVOS
+    ws = wb.create_sheet("Aditivos")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Aditivos", 8, 95)
+
+    if aditivos_lista:
+        df_aditivos = pd.DataFrame([
+            {k: v for k, v in aditivo.items() if k != "_itens_aditivo"}
+            for aditivo in aditivos_lista
+        ])
+    else:
+        df_aditivos = pd.DataFrame([{
+            "Status": "Nenhum aditivo identificado nos documentos analisados."
+        }])
+
+    _write_dataframe_table(ws, 5, df_aditivos, {
+        "A": 10,
+        "B": 24,
+        "C": 42,
+        "D": 18,
+        "E": 20,
+        "F": 14,
+        "G": 20,
+        "H": 46,
+        "I": 18,
+        "J": 42,
+        "K": 42,
+        "L": 26,
+    }, 46)
+
+    # ITENS DOS ADITIVOS
+    ws = wb.create_sheet("Itens dos Aditivos")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Itens dos Aditivos", 8, 95)
+
+    linhas_itens_aditivos = []
+    for aditivo in aditivos_lista:
+        for item in aditivo.get("_itens_aditivo", []):
+            linha = {
+                "Aditivo": aditivo.get("Nº", "Não localizado"),
+                "Anexo do aditivo": aditivo.get("Anexo do aditivo", "Não localizado"),
+            }
+            linha.update(item)
+            linhas_itens_aditivos.append(linha)
+
+    if linhas_itens_aditivos:
+        df_itens_aditivos = pd.DataFrame(linhas_itens_aditivos)
+    else:
+        df_itens_aditivos = pd.DataFrame([{
+            "Status": "Nenhum item específico de aditivo identificado."
+        }])
+
+    _write_dataframe_table(ws, 5, df_itens_aditivos, {
+        "A": 14,
+        "B": 42,
+        "C": 12,
+        "D": 52,
+        "E": 16,
+        "F": 16,
+        "G": 16,
+        "H": 18,
+        "I": 18,
+    }, 46)
 
     # CHECKLIST
     ws = wb.create_sheet("Checklist")
@@ -3370,6 +4892,7 @@ CAMPOS_VALORES_VISUAIS = {
     "Multa": "Penalidade",
     "Vigência após a data de assinatura": "Vigência",
     "Período de Vigência": "Período",
+    "Resumo de Aditivos": "Aditivos",
     "Rescisão e Indenização": "Encerramento",
     "Anticorrupção": "Compliance",
     "Proteção de Dados LGPD": "LGPD",
@@ -3507,14 +5030,8 @@ def _montar_partes_card_valor(label: str, value: Any) -> tuple[str, str, str]:
     principal = partes[0].strip() if partes else txt
     detalhe = " ".join(partes[1:]).strip() if len(partes) > 1 else ""
 
-    if len(principal) > 95:
-        principal = principal[:95].rsplit(" ", 1)[0] + "..."
-
     if not detalhe and len(txt) > len(principal):
-        detalhe = txt.replace(principal.replace("...", ""), "").strip(" .-")
-
-    if len(detalhe) > 220:
-        detalhe = detalhe[:220].rsplit(" ", 1)[0] + "..."
+        detalhe = txt.replace(principal, "").strip(" .-")
 
     return principal, detalhe, alerta
 
@@ -3534,6 +5051,146 @@ def render_info_card(label: str, value: Any) -> str:
         f'<div class="valor-alerta">{safe(alerta)}</div>'
         '</div>'
     )
+
+def render_aditivos_contrato(resultado: Dict[str, Any]) -> None:
+    """Renderiza seção executiva de aditivos identificados de forma limpa e profissional."""
+    aditivos = normalizar_aditivos_contrato(resultado.get("aditivos_contrato", []))
+
+    st.markdown('<div class="section-title">Aditivos identificados</div>', unsafe_allow_html=True)
+
+    resumo = clean_text(resultado.get("resumo_aditivos"))
+
+    total = len(aditivos)
+    assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() == "SIM")
+    nao_assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() in ("NÃO", "NAO"))
+    valor_total_fmt = "Sem valor global fixo"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Aditivos", total)
+    c2.metric("Assinados", assinados)
+    c3.metric("Não assinados", nao_assinados)
+    c4.metric("Valor dos aditivos", valor_total_fmt)
+
+    st.markdown(
+        f"""
+<div class="executive-box">
+    <h3>📎 Resumo dos aditivos</h3>
+    <p>{safe(resumo)}</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    if not aditivos:
+        st.info("Nenhum termo aditivo foi identificado nos documentos analisados.")
+        return
+
+    def curto(valor: Any, limite: int = 90) -> str:
+        return clean_text(valor)
+
+    # Cards executivos por aditivo
+    for i in range(0, len(aditivos), 3):
+        cols = st.columns(3)
+
+        for col, aditivo in zip(cols, aditivos[i:i + 3]):
+            assinado = clean_text(aditivo.get("Assinado"))
+            status_cor = "#16a34a" if assinado.upper() == "SIM" else "#dc2626" if assinado.upper() in ("NÃO", "NAO") else "#f59e0b"
+
+            with col:
+                st.markdown(
+                    f"""
+<div class="valor-card" style="min-height:230px;">
+    <div class="valor-titulo">ADITIVO {safe(aditivo.get("Nº"))}</div>
+    <div class="valor-principal" style="font-size:18px;">{safe(aditivo.get("Tipo do aditivo"))}</div>
+    <div class="valor-detalhe">
+        <b>Anexo:</b><br>{safe(curto(aditivo.get("Anexo do aditivo"), 115))}<br><br>
+        <b>Data:</b> {safe(aditivo.get("Data do aditivo"))}<br>
+        <b>Assinado:</b> <span style="color:{status_cor};font-weight:900;">{safe(assinado)}</span><br>
+        <b>Assinatura:</b> {safe(aditivo.get("Data da assinatura"))}<br>
+        <b>Período:</b> {safe(curto(aditivo.get("Período do aditivo"), 90))}
+    </div>
+    <div class="valor-alerta">{safe(curto(aditivo.get("Status de validação"), 45))}</div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+    # Tabela técnica escondida para não poluir a apresentação
+    with st.expander("📋 Ver tabela técnica dos aditivos", expanded=False):
+        df_aditivos = pd.DataFrame([
+            {k: v for k, v in aditivo.items() if k != "_itens_aditivo"}
+            for aditivo in aditivos
+        ])
+
+        colunas_resumo = [
+            "Nº",
+            "Tipo do aditivo",
+            "Anexo do aditivo",
+            "Data do aditivo",
+            "Assinado",
+            "Data da assinatura",
+            "Valor do aditivo",
+            "Impacto no valor",
+            "Impacto no prazo",
+            "Período do aditivo",
+            "Status de validação",
+        ]
+
+        colunas_resumo = [c for c in colunas_resumo if c in df_aditivos.columns]
+        df_view = df_aditivos[colunas_resumo].copy()
+
+        def _cor_linha_aditivo(row):
+            assinado_linha = clean_text(row.get("Assinado")).upper()
+
+            if assinado_linha == "SIM":
+                return ["background-color: rgba(22, 163, 74, 0.22); color: #ffffff; font-weight: 700;"] * len(row)
+
+            if assinado_linha in ("NÃO", "NAO"):
+                return ["background-color: rgba(220, 38, 38, 0.24); color: #ffffff; font-weight: 700;"] * len(row)
+
+            return ["background-color: rgba(245, 158, 11, 0.18); color: #ffffff; font-weight: 700;"] * len(row)
+
+        st.dataframe(
+            df_view.style.apply(_cor_linha_aditivo, axis=1),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown('<div class="section-title">Detalhamento dos aditivos</div>', unsafe_allow_html=True)
+
+    for idx, aditivo in enumerate(aditivos, 1):
+        titulo = (
+            f"Aditivo {aditivo.get('Nº', idx)} • "
+            f"{aditivo.get('Assinado', 'Não localizado')} • "
+            f"{aditivo.get('Anexo do aditivo', 'Anexo não localizado')}"
+        )
+
+        with st.expander(titulo):
+            d1, d2, d3 = st.columns(3)
+
+            d1.markdown(f"**Tipo do aditivo**  \n{safe(aditivo.get('Tipo do aditivo'))}", unsafe_allow_html=True)
+            d1.markdown(f"**Anexo do aditivo**  \n{safe(aditivo.get('Anexo do aditivo'))}", unsafe_allow_html=True)
+            d1.markdown(f"**Data do aditivo**  \n{safe(aditivo.get('Data do aditivo'))}", unsafe_allow_html=True)
+            d1.markdown(f"**Data de carga no robô**  \n{safe(aditivo.get('Data de carga no robô'))}", unsafe_allow_html=True)
+
+            d2.markdown(f"**Assinado**  \n{safe(aditivo.get('Assinado'))}", unsafe_allow_html=True)
+            d2.markdown(f"**Data da assinatura**  \n{safe(aditivo.get('Data da assinatura'))}", unsafe_allow_html=True)
+            d2.markdown(f"**Quem assinou**  \n{safe(aditivo.get('Quem assinou'))}", unsafe_allow_html=True)
+
+            d3.markdown(f"**Valor do aditivo**  \n{safe(aditivo.get('Valor do aditivo'))}", unsafe_allow_html=True)
+            d3.markdown(f"**Impacto no valor**  \n{safe(aditivo.get('Impacto no valor'))}", unsafe_allow_html=True)
+            d3.markdown(f"**Impacto no prazo**  \n{safe(aditivo.get('Impacto no prazo'))}", unsafe_allow_html=True)
+
+            st.markdown(f"**Período do aditivo**  \n{safe(aditivo.get('Período do aditivo'))}", unsafe_allow_html=True)
+            st.markdown(f"**Escopo do aditivo**  \n{safe(aditivo.get('Escopo do aditivo'))}", unsafe_allow_html=True)
+            st.markdown(f"**Status de validação**  \n{safe(aditivo.get('Status de validação'))}", unsafe_allow_html=True)
+
+            itens = aditivo.get("_itens_aditivo", [])
+            if itens:
+                with st.expander(f"📦 Itens do aditivo {aditivo.get('Nº', idx)}", expanded=False):
+                    st.dataframe(pd.DataFrame(itens), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Nenhum item específico foi identificado para este aditivo.")
 
 
 def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e serviços identificados") -> None:
@@ -3731,8 +5388,6 @@ def render_analise_completa_historico(row: pd.Series) -> None:
 
     st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>', unsafe_allow_html=True)
-
-    render_itens_contrato(resultado)
 
     st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
     df_checklist = pd.DataFrame(resultado.get("checklist", []))
@@ -4430,6 +6085,10 @@ if pagina == "📄 Nova Análise":
                 resultado["arquivos_analisados"] = nomes_arquivos
                 resultado["tipo_origem"] = origem_contrato.replace("📘", "").replace("🛒", "").strip()
                 resultado["modelo_ia"] = resultado.get("modelo_ia", modo if modo != "Análise Local" else "Análise Local")
+
+                # Reprocessa aditivos depois que data_analise e arquivos_analisados já foram preenchidos
+                resultado = aplicar_regras_aditivos(resultado, texto)
+
                 salvar_analise(
                     resultado,
                     nomes_arquivos,
@@ -4463,6 +6122,7 @@ if pagina == "📄 Nova Análise":
             st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material"))}</div>', unsafe_allow_html=True)
 
+            render_aditivos_contrato(resultado)
             render_itens_contrato(resultado)
 
             st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
