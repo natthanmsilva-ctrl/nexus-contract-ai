@@ -10,3 +10,6 @@ Ajustes desta entrega:
 
 Configuração:
 - Defina GEMINI_API_KEY no .env local ou nos Secrets da publicação.
+
+
+Observação técnica: este pacote inclui `google-genai>=1.0.0` para permitir análise dos documentos originais pela Files API do Gemini.

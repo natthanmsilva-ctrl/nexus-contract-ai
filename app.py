@@ -3325,6 +3325,30 @@ def _gerar_texto_com_sdk_legado(texto: str, api_key: str, modelo: str) -> Dict[s
     return _json_da_resposta_gemini(resp)
 
 
+
+def _importar_google_genai_novo():
+    """
+    Importa o SDK novo do Gemini usado pela Files API.
+
+    O erro "cannot import name 'genai' from 'google'" acontece quando o pacote
+    google-genai não foi instalado no ambiente, ou quando o ambiente ainda está
+    usando somente o pacote legado google-generativeai.
+    """
+    try:
+        from google import genai as genai_new  # pacote: google-genai
+        return genai_new
+    except Exception as erro_1:
+        try:
+            import google.genai as genai_new  # fallback de importação
+            return genai_new
+        except Exception as erro_2:
+            raise ImportError(
+                "SDK novo do Gemini não disponível. Instale/atualize o pacote "
+                "google-genai no requirements.txt. Sem ele, a Files API não consegue "
+                "analisar os documentos originais e o sistema usa apenas texto extraído. "
+                f"Detalhe técnico: {erro_1 or erro_2}"
+            ) from erro_2
+
 def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
     """Analisa com Gemini.
 
@@ -3342,7 +3366,7 @@ def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_origin
 
     if arquivos_originais:
         try:
-            from google import genai as genai_new
+            genai_new = _importar_google_genai_novo()
 
             client = genai_new.Client(api_key=api_key)
             uploaded_files, temp_paths, erros_upload = _subir_arquivos_originais_gemini(client, arquivos_originais)
