@@ -5237,20 +5237,86 @@ def render_info_card(label: str, value: Any) -> str:
 
 
 def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
-    """Renderiza os cards de Dados Extraídos com botão de copiar por card e botão geral."""
-    cards = []
-    textos = []
+    """Renderiza os Dados Extraídos em abas, com botão de copiar por card, por aba e geral."""
+
+    grupos_abas = [
+        (
+            "resumo",
+            "Resumo geral",
+            "Visão principal do contrato",
+            [
+                "tipo_contrato",
+                "empresa_grupo_sbf",
+                "contraparte",
+                "objetivo",
+                "descricao_breve_cadastro",
+            ],
+        ),
+        (
+            "partes",
+            "Partes e localização",
+            "Empresas, CNPJs, local e assinaturas",
+            [
+                "cnpj_empresa_grupo",
+                "local_prestacao",
+                "cnpj_contraparte",
+                "pessoas_que_assinaram",
+            ],
+        ),
+        (
+            "escopo",
+            "Escopo e pagamento",
+            "Serviço/material, pagamento, prazo e multa",
+            [
+                "descricao_servico_material",
+                "forma_pagamento",
+                "condicao_pagamento_dias",
+                "multa",
+            ],
+        ),
+        (
+            "vigencia",
+            "Vigência e valores",
+            "Datas, período, valores e projeções",
+            [
+                "vigencia_apos_assinatura",
+                "periodo_vigencia_formatado",
+                "data_assinatura",
+                "data_contrato",
+                "data_conclusao_docusign",
+                "valor_contrato_original",
+                "valor_mensal_estimado",
+                "valor_total_estimado_vigencia",
+                "valor_total_materiais_servicos",
+            ],
+        ),
+        (
+            "juridico",
+            "Cláusulas e aditivos",
+            "Rescisão, compliance, LGPD e aditivos",
+            [
+                "resumo_aditivos",
+                "rescisao_indenizacao",
+                "anticorrupcao",
+                "protecao_dados_lgpd",
+            ],
+        ),
+    ]
+
+    label_por_chave = {chave: label for label, chave in CAMPOS_OFICIAIS}
+    card_por_chave = {}
+    texto_por_chave = {}
 
     for label, chave in CAMPOS_OFICIAIS:
         principal, detalhe, alerta = _montar_partes_card_valor(label, resultado.get(chave))
         texto_copiar = _texto_copiavel_card(label, principal, detalhe, alerta)
-        textos.append(texto_copiar)
+        texto_por_chave[chave] = texto_copiar
 
         detalhe_html = ""
         if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
             detalhe_html = f'<div class="valor-detalhe">{safe(detalhe)}</div>'
 
-        cards.append(
+        card_por_chave[chave] = (
             '<div class="valor-card">'
             f'<button type="button" class="copy-card-btn" title="Copiar este campo" data-copy="{html.escape(texto_copiar, quote=True)}">⧉</button>'
             f'<div class="valor-titulo">{safe(label)}</div>'
@@ -5260,12 +5326,44 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
             '</div>'
         )
 
-    texto_todos = "\n\n".join(textos)
-    qtd_cards = len(cards)
-    # Altura de segurança para evitar barra de rolagem interna no iframe do componente.
-    # O próprio HTML abaixo tenta ajustar a altura automaticamente pelo navegador;
-    # esta altura maior fica como fallback caso o navegador bloqueie o resize.
-    altura = max(1200, min(5600, 150 + (qtd_cards * 188)))
+    textos_todos = []
+    for _, chave in CAMPOS_OFICIAIS:
+        if chave in texto_por_chave:
+            textos_todos.append(texto_por_chave[chave])
+    texto_todos = "\n\n".join(textos_todos)
+
+    nav_tabs = []
+    panels = []
+    max_cards_aba = 0
+
+    for idx, (aba_id, titulo, subtitulo, chaves) in enumerate(grupos_abas):
+        chaves_validas = [c for c in chaves if c in card_por_chave]
+        max_cards_aba = max(max_cards_aba, len(chaves_validas))
+        active = " active" if idx == 0 else ""
+        hidden_style = "" if idx == 0 else " style=\"display:none;\""
+        texto_aba = "\n\n".join([texto_por_chave.get(c, "") for c in chaves_validas if texto_por_chave.get(c)])
+        cards_html = "".join([card_por_chave[c] for c in chaves_validas])
+
+        nav_tabs.append(
+            f'<button type="button" class="tab-btn{active}" data-tab="{aba_id}">'
+            f'<span>{safe(titulo)}</span>'
+            f'<small>{len(chaves_validas)} campos</small>'
+            '</button>'
+        )
+
+        panels.append(
+            f'<section class="tab-panel{active}" id="panel-{aba_id}" data-copy-tab="{html.escape(texto_aba, quote=True)}"{hidden_style}>'
+            '<div class="tab-panel-head">'
+            f'<div><h3>{safe(titulo)}</h3><p>{safe(subtitulo)}</p></div>'
+            f'<button type="button" class="copy-tab-btn" data-copy="{html.escape(texto_aba, quote=True)}">⧉ Copiar esta aba</button>'
+            '</div>'
+            f'<div class="info-grid">{cards_html}</div>'
+            '</section>'
+        )
+
+    # Altura de segurança para evitar barra interna no iframe. Como agora há abas,
+    # usamos a maior aba como referência em vez de todos os cards de uma vez.
+    altura = max(980, min(2800, 360 + (max_cards_aba * 210)))
 
     html_component = f"""
 <!DOCTYPE html>
@@ -5281,13 +5379,32 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         color:#f8fafc;
         font-family:Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }}
-    .copy-toolbar{{
+    .dados-tabs-wrap{{
+        width:100%;
+    }}
+    .dados-topbar{{
         display:flex;
-        justify-content:flex-end;
+        justify-content:space-between;
+        gap:14px;
         align-items:center;
         margin:0 0 14px 0;
     }}
-    .copy-all-btn{{
+    .dados-topbar-title{{
+        display:flex;
+        flex-direction:column;
+        gap:4px;
+    }}
+    .dados-topbar-title strong{{
+        color:#f3e6b3;
+        font-size:18px;
+        font-weight:950;
+    }}
+    .dados-topbar-title span{{
+        color:#94a3b8;
+        font-size:12px;
+        font-weight:800;
+    }}
+    .copy-all-btn, .copy-tab-btn{{
         border:1px solid rgba(215,191,117,.36);
         background:linear-gradient(135deg,rgba(0,77,61,.95),rgba(6,95,70,.88));
         color:#fff;
@@ -5296,8 +5413,82 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         font-weight:950;
         cursor:pointer;
         box-shadow:0 10px 24px rgba(0,0,0,.22);
+        white-space:nowrap;
     }}
-    .copy-all-btn:hover{{filter:brightness(1.12);transform:translateY(-1px);}}
+    .copy-tab-btn{{
+        padding:8px 12px;
+        font-size:12px;
+        border-radius:12px;
+    }}
+    .copy-all-btn:hover, .copy-tab-btn:hover{{filter:brightness(1.12);transform:translateY(-1px);}}
+    .tabs-nav{{
+        display:grid;
+        grid-template-columns:repeat(5,minmax(0,1fr));
+        gap:10px;
+        margin:0 0 16px 0;
+    }}
+    .tab-btn{{
+        border:1px solid rgba(215,191,117,.22);
+        background:linear-gradient(145deg,rgba(16,24,34,.98),rgba(10,17,24,.98));
+        color:#d8dee9;
+        border-radius:16px;
+        padding:12px 12px;
+        cursor:pointer;
+        text-align:left;
+        min-height:68px;
+        transition:.18s ease;
+        box-shadow:0 10px 22px rgba(0,0,0,.18);
+    }}
+    .tab-btn span{{
+        display:block;
+        color:#f8fafc;
+        font-weight:950;
+        font-size:13px;
+        line-height:1.25;
+        margin-bottom:5px;
+    }}
+    .tab-btn small{{
+        color:#94a3b8;
+        font-size:11px;
+        font-weight:900;
+    }}
+    .tab-btn:hover{{
+        border-color:rgba(215,191,117,.46);
+        transform:translateY(-1px);
+    }}
+    .tab-btn.active{{
+        background:linear-gradient(135deg,rgba(0,77,61,.98),rgba(6,95,70,.82));
+        border-color:rgba(215,191,117,.55);
+        box-shadow:0 0 0 1px rgba(215,191,117,.10),0 14px 30px rgba(0,0,0,.26);
+    }}
+    .tab-panel{{
+        border:1px solid rgba(215,191,117,.18);
+        border-radius:22px;
+        padding:16px;
+        background:linear-gradient(145deg,rgba(8,13,19,.54),rgba(6,11,16,.44));
+    }}
+    .tab-panel-head{{
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:12px;
+        margin:0 0 14px 0;
+        padding:0 2px 12px 2px;
+        border-bottom:1px solid rgba(215,191,117,.12);
+    }}
+    .tab-panel-head h3{{
+        margin:0 0 4px 0;
+        color:#d7bf75;
+        font-size:18px;
+        line-height:1.2;
+        font-weight:950;
+    }}
+    .tab-panel-head p{{
+        margin:0;
+        color:#94a3b8;
+        font-size:12px;
+        font-weight:800;
+    }}
     .info-grid{{
         display:grid;
         grid-template-columns:repeat(3, minmax(0, 1fr));
@@ -5342,7 +5533,7 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         transition:.18s ease;
     }}
     .copy-card-btn:hover{{background:rgba(215,191,117,.16);transform:translateY(-1px);}}
-    .copy-card-btn.ok{{background:rgba(16,185,129,.22);border-color:rgba(16,185,129,.45);color:#ecfdf5;}}
+    .copy-card-btn.ok, .copy-all-btn.ok, .copy-tab-btn.ok{{background:rgba(16,185,129,.22);border-color:rgba(16,185,129,.45);color:#ecfdf5;}}
     .valor-titulo{{
         color:#d7bf75;
         font-weight:950;
@@ -5395,15 +5586,30 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         transition:.2s ease;
     }}
     .copy-toast.show{{opacity:1;transform:translateY(0);}}
-    @media(max-width:1100px){{.info-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
-    @media(max-width:720px){{.info-grid{{grid-template-columns:1fr;}}.copy-toolbar{{justify-content:stretch;}}.copy-all-btn{{width:100%;}}}}
+    @media(max-width:1180px){{
+        .tabs-nav{{grid-template-columns:repeat(3,minmax(0,1fr));}}
+        .info-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}
+    }}
+    @media(max-width:760px){{
+        .dados-topbar,.tab-panel-head{{flex-direction:column;align-items:stretch;}}
+        .copy-all-btn,.copy-tab-btn{{width:100%;}}
+        .tabs-nav{{grid-template-columns:1fr;}}
+        .info-grid{{grid-template-columns:1fr;}}
+    }}
 </style>
 </head>
 <body>
-    <div class="copy-toolbar">
-        <button type="button" class="copy-all-btn" data-copy="{html.escape(texto_todos, quote=True)}">⧉ Copiar todos os dados extraídos</button>
+    <div class="dados-tabs-wrap">
+        <div class="dados-topbar">
+            <div class="dados-topbar-title">
+                <strong>Dados organizados por categoria</strong>
+                <span>Use as abas para consultar cada bloco da análise sem poluir a tela.</span>
+            </div>
+            <button type="button" class="copy-all-btn" data-copy="{html.escape(texto_todos, quote=True)}">⧉ Copiar todos os dados extraídos</button>
+        </div>
+        <nav class="tabs-nav">{''.join(nav_tabs)}</nav>
+        {''.join(panels)}
     </div>
-    <div class="info-grid">{''.join(cards)}</div>
     <div id="copy-toast" class="copy-toast">Informação copiada</div>
 <script>
 (function(){{
@@ -5412,15 +5618,11 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
             document.body.scrollHeight || 0,
             document.documentElement.scrollHeight || 0
         ) + 24;
-
-        // Mensagem reconhecida pelo Streamlit para ajustar a altura do iframe.
         window.parent.postMessage({{
             isStreamlitMessage: true,
             type: 'streamlit:setFrameHeight',
             height: h
         }}, '*');
-
-        // Fallback para versões/comportamentos diferentes do componente.
         window.parent.postMessage({{
             type: 'streamlit:setFrameHeight',
             height: h
@@ -5431,7 +5633,6 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
     window.addEventListener('resize', ajustarAlturaComponente);
     setTimeout(ajustarAlturaComponente, 150);
     setTimeout(ajustarAlturaComponente, 600);
-
     if (window.ResizeObserver) {{
         new ResizeObserver(ajustarAlturaComponente).observe(document.body);
     }}
@@ -5463,6 +5664,24 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         }}
     }}
 
+    document.querySelectorAll('.tab-btn').forEach((btn) => {{
+        btn.addEventListener('click', () => {{
+            const tab = btn.getAttribute('data-tab');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => {{
+                p.classList.remove('active');
+                p.style.display = 'none';
+            }});
+            btn.classList.add('active');
+            const panel = document.getElementById('panel-' + tab);
+            if (panel) {{
+                panel.classList.add('active');
+                panel.style.display = '';
+            }}
+            setTimeout(ajustarAlturaComponente, 50);
+        }});
+    }});
+
     document.querySelectorAll('[data-copy]').forEach((btn) => {{
         btn.addEventListener('click', async () => {{
             const text = btn.getAttribute('data-copy') || '';
@@ -5478,8 +5697,22 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
                     btn.classList.remove('ok');
                     btn.textContent = original;
                 }}, 1100);
+            }} else {{
+                btn.classList.add('ok');
+                const original = btn.textContent;
+                btn.textContent = '✓ Copiado';
+                setTimeout(() => {{
+                    btn.classList.remove('ok');
+                    btn.textContent = original;
+                }}, 1100);
             }}
-            showToast(btn.classList.contains('copy-all-btn') ? 'Todos os dados foram copiados' : 'Campo copiado');
+            if (btn.classList.contains('copy-all-btn')) {{
+                showToast('Todos os dados foram copiados');
+            }} else if (btn.classList.contains('copy-tab-btn')) {{
+                showToast('Dados da aba copiados');
+            }} else {{
+                showToast('Campo copiado');
+            }}
         }});
     }});
 }})();
@@ -5487,9 +5720,7 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
 </body>
 </html>
 """
-    # scrolling=False remove a barra de rolagem interna que aparecia ao lado dos cards.
     components.html(html_component, height=altura, scrolling=False)
-
 
 # =========================================================
 # POPUP AO VIVO DE PROCESSAMENTO
