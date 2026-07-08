@@ -27,6 +27,7 @@ except Exception:
 import pandas as pd
 import sqlite3
 import streamlit as st
+import streamlit.components.v1 as components
 import pdfplumber
 import pytesseract
 from pdf2image import convert_from_bytes
@@ -689,6 +690,28 @@ div[data-testid="stVerticalBlockBorderWrapper"] label{
     box-shadow:0 10px 28px rgba(0,0,0,.24);
     position:relative;
     overflow:hidden;
+}
+
+.copy-card-btn{
+    position:absolute;
+    top:10px;
+    right:10px;
+    width:32px;
+    height:32px;
+    border-radius:10px;
+    border:1px solid rgba(215,191,117,.28);
+    background:rgba(255,255,255,.045);
+    color:#f3e6b3;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:15px;
+    cursor:pointer;
+}
+
+.copy-card-btn:hover{
+    background:rgba(215,191,117,.14);
+    transform:translateY(-1px);
 }
 
 .valor-card::before{
@@ -5183,8 +5206,20 @@ def _montar_partes_card_valor(label: str, value: Any) -> tuple[str, str, str]:
     return principal, detalhe, alerta
 
 
+def _texto_copiavel_card(label: str, principal: str, detalhe: str, alerta: str) -> str:
+    """Monta o texto que será copiado pelo botão do card."""
+    linhas = [str(label).strip(), str(principal).strip()]
+    if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
+        linhas.append(str(detalhe).strip())
+    if alerta and clean_text(alerta) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
+        linhas.append(f"Observação: {str(alerta).strip()}")
+    return "\n".join([x for x in linhas if x])
+
+
 def render_info_card(label: str, value: Any) -> str:
     principal, detalhe, alerta = _montar_partes_card_valor(label, value)
+    texto_copiar = _texto_copiavel_card(label, principal, detalhe, alerta)
+    texto_copiar_attr = html.escape(texto_copiar, quote=True)
 
     detalhe_html = ""
     if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
@@ -5192,12 +5227,235 @@ def render_info_card(label: str, value: Any) -> str:
 
     return (
         '<div class="valor-card">'
+        f'<button type="button" class="copy-card-btn" title="Copiar informação" aria-label="Copiar informação" data-copy="{texto_copiar_attr}">⧉</button>'
         f'<div class="valor-titulo">{safe(label)}</div>'
         f'<div class="valor-principal">{safe(principal)}</div>'
         f'{detalhe_html}'
         f'<div class="valor-alerta">{safe(alerta)}</div>'
         '</div>'
     )
+
+
+def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
+    """Renderiza os cards de Dados Extraídos com botão de copiar por card e botão geral."""
+    cards = []
+    textos = []
+
+    for label, chave in CAMPOS_OFICIAIS:
+        principal, detalhe, alerta = _montar_partes_card_valor(label, resultado.get(chave))
+        texto_copiar = _texto_copiavel_card(label, principal, detalhe, alerta)
+        textos.append(texto_copiar)
+
+        detalhe_html = ""
+        if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
+            detalhe_html = f'<div class="valor-detalhe">{safe(detalhe)}</div>'
+
+        cards.append(
+            '<div class="valor-card">'
+            f'<button type="button" class="copy-card-btn" title="Copiar este campo" data-copy="{html.escape(texto_copiar, quote=True)}">⧉</button>'
+            f'<div class="valor-titulo">{safe(label)}</div>'
+            f'<div class="valor-principal">{safe(principal)}</div>'
+            f'{detalhe_html}'
+            f'<div class="valor-alerta">{safe(alerta)}</div>'
+            '</div>'
+        )
+
+    texto_todos = "\n\n".join(textos)
+    qtd_cards = len(cards)
+    altura = max(720, min(1900, 90 + ((qtd_cards + 2) // 3) * 172))
+
+    html_component = f"""
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<style>
+    *{{box-sizing:border-box;}}
+    body{{
+        margin:0;
+        padding:0;
+        background:transparent;
+        color:#f8fafc;
+        font-family:Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    .copy-toolbar{{
+        display:flex;
+        justify-content:flex-end;
+        align-items:center;
+        margin:0 0 14px 0;
+    }}
+    .copy-all-btn{{
+        border:1px solid rgba(215,191,117,.36);
+        background:linear-gradient(135deg,rgba(0,77,61,.95),rgba(6,95,70,.88));
+        color:#fff;
+        border-radius:14px;
+        padding:10px 16px;
+        font-weight:950;
+        cursor:pointer;
+        box-shadow:0 10px 24px rgba(0,0,0,.22);
+    }}
+    .copy-all-btn:hover{{filter:brightness(1.12);transform:translateY(-1px);}}
+    .info-grid{{
+        display:grid;
+        grid-template-columns:repeat(3, minmax(0, 1fr));
+        gap:16px;
+    }}
+    .valor-card{{
+        background:linear-gradient(145deg,#101821,#0b1118);
+        border:1px solid rgba(215,191,117,.30);
+        border-radius:18px;
+        padding:18px;
+        padding-right:54px;
+        min-height:152px;
+        box-shadow:0 10px 28px rgba(0,0,0,.24);
+        position:relative;
+        overflow:hidden;
+    }}
+    .valor-card::before{{
+        content:"";
+        position:absolute;
+        left:0;
+        top:0;
+        width:100%;
+        height:4px;
+        background:linear-gradient(90deg,#d7bf75,#065f46);
+    }}
+    .valor-card.copiado{{border-color:rgba(52,211,153,.85);box-shadow:0 0 0 1px rgba(52,211,153,.18),0 10px 28px rgba(0,0,0,.24);}}
+    .copy-card-btn{{
+        position:absolute;
+        top:12px;
+        right:12px;
+        width:34px;
+        height:34px;
+        border-radius:11px;
+        border:1px solid rgba(215,191,117,.34);
+        background:rgba(255,255,255,.055);
+        color:#f3e6b3;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        font-size:16px;
+        cursor:pointer;
+        transition:.18s ease;
+    }}
+    .copy-card-btn:hover{{background:rgba(215,191,117,.16);transform:translateY(-1px);}}
+    .copy-card-btn.ok{{background:rgba(16,185,129,.22);border-color:rgba(16,185,129,.45);color:#ecfdf5;}}
+    .valor-titulo{{
+        color:#d7bf75;
+        font-weight:950;
+        text-transform:uppercase;
+        letter-spacing:.7px;
+        font-size:11px;
+        margin-bottom:12px;
+        line-height:1.25;
+    }}
+    .valor-principal{{
+        color:#ffffff;
+        font-size:22px;
+        line-height:1.18;
+        font-weight:950;
+        margin-bottom:10px;
+        overflow-wrap:anywhere;
+    }}
+    .valor-detalhe{{
+        color:#d8dee9;
+        font-size:13px;
+        line-height:1.45;
+        font-weight:700;
+        overflow-wrap:anywhere;
+    }}
+    .valor-alerta{{
+        display:inline-block;
+        margin-top:12px;
+        padding:5px 10px;
+        border-radius:999px;
+        background:rgba(215,191,117,.12);
+        color:#f3e6b3;
+        border:1px solid rgba(215,191,117,.28);
+        font-size:11px;
+        font-weight:950;
+    }}
+    .copy-toast{{
+        position:fixed;
+        right:14px;
+        bottom:14px;
+        background:rgba(0,77,61,.98);
+        border:1px solid rgba(215,191,117,.35);
+        color:#fff;
+        padding:11px 14px;
+        border-radius:14px;
+        font-weight:900;
+        box-shadow:0 16px 34px rgba(0,0,0,.32);
+        opacity:0;
+        transform:translateY(12px);
+        pointer-events:none;
+        transition:.2s ease;
+    }}
+    .copy-toast.show{{opacity:1;transform:translateY(0);}}
+    @media(max-width:1100px){{.info-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
+    @media(max-width:720px){{.info-grid{{grid-template-columns:1fr;}}.copy-toolbar{{justify-content:stretch;}}.copy-all-btn{{width:100%;}}}}
+</style>
+</head>
+<body>
+    <div class="copy-toolbar">
+        <button type="button" class="copy-all-btn" data-copy="{html.escape(texto_todos, quote=True)}">⧉ Copiar todos os dados extraídos</button>
+    </div>
+    <div class="info-grid">{''.join(cards)}</div>
+    <div id="copy-toast" class="copy-toast">Informação copiada</div>
+<script>
+(function(){{
+    function showToast(msg){{
+        const toast = document.getElementById('copy-toast');
+        toast.textContent = msg || 'Informação copiada';
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 1400);
+    }}
+
+    function fallbackCopy(text){{
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        try {{ document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(area);
+    }}
+
+    async function copiar(text){{
+        if (navigator.clipboard && window.isSecureContext) {{
+            await navigator.clipboard.writeText(text);
+        }} else {{
+            fallbackCopy(text);
+        }}
+    }}
+
+    document.querySelectorAll('[data-copy]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+            const text = btn.getAttribute('data-copy') || '';
+            await copiar(text);
+            const card = btn.closest('.valor-card');
+            if (card) {{
+                card.classList.add('copiado');
+                btn.classList.add('ok');
+                const original = btn.textContent;
+                btn.textContent = '✓';
+                setTimeout(() => {{
+                    card.classList.remove('copiado');
+                    btn.classList.remove('ok');
+                    btn.textContent = original;
+                }}, 1100);
+            }}
+            showToast(btn.classList.contains('copy-all-btn') ? 'Todos os dados foram copiados' : 'Campo copiado');
+        }});
+    }});
+}})();
+</script>
+</body>
+</html>
+"""
+    components.html(html_component, height=altura, scrolling=True)
 
 
 # =========================================================
@@ -6543,11 +6801,7 @@ def render_analise_completa_historico(row: pd.Series) -> None:
     render_triagem_anexos(resultado)
 
     st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
-    cards_html = "".join(
-        render_info_card(label, resultado.get(chave))
-        for label, chave in CAMPOS_OFICIAIS
-    )
-    st.markdown(f'<div class="info-grid">{cards_html}</div>', unsafe_allow_html=True)
+    render_info_grid_com_copy(resultado)
 
     st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>', unsafe_allow_html=True)
@@ -7433,11 +7687,7 @@ if pagina == "📄 Nova Análise":
             render_triagem_anexos(resultado)
 
             st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
-            cards_html = "".join(
-                render_info_card(label, resultado.get(chave))
-                for label, chave in CAMPOS_OFICIAIS
-            )
-            st.markdown(f'<div class="info-grid">{cards_html}</div>', unsafe_allow_html=True)
+            render_info_grid_com_copy(resultado)
 
             st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material"))}</div>', unsafe_allow_html=True)
