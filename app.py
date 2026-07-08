@@ -5262,7 +5262,10 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
 
     texto_todos = "\n\n".join(textos)
     qtd_cards = len(cards)
-    altura = max(720, min(1900, 90 + ((qtd_cards + 2) // 3) * 172))
+    # Altura de segurança para evitar barra de rolagem interna no iframe do componente.
+    # O próprio HTML abaixo tenta ajustar a altura automaticamente pelo navegador;
+    # esta altura maior fica como fallback caso o navegador bloqueie o resize.
+    altura = max(1200, min(5600, 150 + (qtd_cards * 188)))
 
     html_component = f"""
 <!DOCTYPE html>
@@ -5404,6 +5407,35 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
     <div id="copy-toast" class="copy-toast">Informação copiada</div>
 <script>
 (function(){{
+    function ajustarAlturaComponente(){{
+        const h = Math.max(
+            document.body.scrollHeight || 0,
+            document.documentElement.scrollHeight || 0
+        ) + 24;
+
+        // Mensagem reconhecida pelo Streamlit para ajustar a altura do iframe.
+        window.parent.postMessage({{
+            isStreamlitMessage: true,
+            type: 'streamlit:setFrameHeight',
+            height: h
+        }}, '*');
+
+        // Fallback para versões/comportamentos diferentes do componente.
+        window.parent.postMessage({{
+            type: 'streamlit:setFrameHeight',
+            height: h
+        }}, '*');
+    }}
+
+    window.addEventListener('load', ajustarAlturaComponente);
+    window.addEventListener('resize', ajustarAlturaComponente);
+    setTimeout(ajustarAlturaComponente, 150);
+    setTimeout(ajustarAlturaComponente, 600);
+
+    if (window.ResizeObserver) {{
+        new ResizeObserver(ajustarAlturaComponente).observe(document.body);
+    }}
+
     function showToast(msg){{
         const toast = document.getElementById('copy-toast');
         toast.textContent = msg || 'Informação copiada';
@@ -5455,7 +5487,8 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
 </body>
 </html>
 """
-    components.html(html_component, height=altura, scrolling=True)
+    # scrolling=False remove a barra de rolagem interna que aparecia ao lado dos cards.
+    components.html(html_component, height=altura, scrolling=False)
 
 
 # =========================================================
