@@ -10,6 +10,7 @@ import os
 import re
 import json
 import html
+import math
 import base64
 import tempfile
 import time
@@ -5237,86 +5238,25 @@ def render_info_card(label: str, value: Any) -> str:
 
 
 def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
-    """Renderiza os Dados Extraídos em abas, com botão de copiar por card, por aba e geral."""
+    """Renderiza os Dados Extraídos em uma única grade, com botão de copiar por card e geral.
 
-    grupos_abas = [
-        (
-            "resumo",
-            "Resumo geral",
-            "Visão principal do contrato",
-            [
-                "tipo_contrato",
-                "empresa_grupo_sbf",
-                "contraparte",
-                "objetivo",
-                "descricao_breve_cadastro",
-            ],
-        ),
-        (
-            "partes",
-            "Partes e localização",
-            "Empresas, CNPJs, local e assinaturas",
-            [
-                "cnpj_empresa_grupo",
-                "local_prestacao",
-                "cnpj_contraparte",
-                "pessoas_que_assinaram",
-            ],
-        ),
-        (
-            "escopo",
-            "Escopo e pagamento",
-            "Serviço/material, pagamento, prazo e multa",
-            [
-                "descricao_servico_material",
-                "forma_pagamento",
-                "condicao_pagamento_dias",
-                "multa",
-            ],
-        ),
-        (
-            "vigencia",
-            "Vigência e valores",
-            "Datas, período, valores e projeções",
-            [
-                "vigencia_apos_assinatura",
-                "periodo_vigencia_formatado",
-                "data_assinatura",
-                "data_contrato",
-                "data_conclusao_docusign",
-                "valor_contrato_original",
-                "valor_mensal_estimado",
-                "valor_total_estimado_vigencia",
-                "valor_total_materiais_servicos",
-            ],
-        ),
-        (
-            "juridico",
-            "Cláusulas e aditivos",
-            "Rescisão, compliance, LGPD e aditivos",
-            [
-                "resumo_aditivos",
-                "rescisao_indenizacao",
-                "anticorrupcao",
-                "protecao_dados_lgpd",
-            ],
-        ),
-    ]
+    Observação: as abas principais da tela ficam fora deste componente. Aqui ficam apenas os cards
+    das informações do contrato, para evitar o vão preto causado por abas internas em iframe.
+    """
 
-    label_por_chave = {chave: label for label, chave in CAMPOS_OFICIAIS}
-    card_por_chave = {}
-    texto_por_chave = {}
+    cards_html = []
+    textos_todos = []
 
     for label, chave in CAMPOS_OFICIAIS:
         principal, detalhe, alerta = _montar_partes_card_valor(label, resultado.get(chave))
         texto_copiar = _texto_copiavel_card(label, principal, detalhe, alerta)
-        texto_por_chave[chave] = texto_copiar
+        textos_todos.append(texto_copiar)
 
         detalhe_html = ""
         if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
             detalhe_html = f'<div class="valor-detalhe">{safe(detalhe)}</div>'
 
-        card_por_chave[chave] = (
+        cards_html.append(
             '<div class="valor-card">'
             f'<button type="button" class="copy-card-btn" title="Copiar este campo" data-copy="{html.escape(texto_copiar, quote=True)}">⧉</button>'
             f'<div class="valor-titulo">{safe(label)}</div>'
@@ -5326,44 +5266,10 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
             '</div>'
         )
 
-    textos_todos = []
-    for _, chave in CAMPOS_OFICIAIS:
-        if chave in texto_por_chave:
-            textos_todos.append(texto_por_chave[chave])
-    texto_todos = "\n\n".join(textos_todos)
-
-    nav_tabs = []
-    panels = []
-    max_cards_aba = 0
-
-    for idx, (aba_id, titulo, subtitulo, chaves) in enumerate(grupos_abas):
-        chaves_validas = [c for c in chaves if c in card_por_chave]
-        max_cards_aba = max(max_cards_aba, len(chaves_validas))
-        active = " active" if idx == 0 else ""
-        hidden_style = "" if idx == 0 else " style=\"display:none;\""
-        texto_aba = "\n\n".join([texto_por_chave.get(c, "") for c in chaves_validas if texto_por_chave.get(c)])
-        cards_html = "".join([card_por_chave[c] for c in chaves_validas])
-
-        nav_tabs.append(
-            f'<button type="button" class="tab-btn{active}" data-tab="{aba_id}">'
-            f'<span>{safe(titulo)}</span>'
-            f'<small>{len(chaves_validas)} campos</small>'
-            '</button>'
-        )
-
-        panels.append(
-            f'<section class="tab-panel{active}" id="panel-{aba_id}" data-copy-tab="{html.escape(texto_aba, quote=True)}"{hidden_style}>'
-            '<div class="tab-panel-head">'
-            f'<div><h3>{safe(titulo)}</h3><p>{safe(subtitulo)}</p></div>'
-            f'<button type="button" class="copy-tab-btn" data-copy="{html.escape(texto_aba, quote=True)}">⧉ Copiar esta aba</button>'
-            '</div>'
-            f'<div class="info-grid">{cards_html}</div>'
-            '</section>'
-        )
-
-    # Altura de segurança para evitar barra interna no iframe. Como agora há abas,
-    # usamos a maior aba como referência em vez de todos os cards de uma vez.
-    altura = max(980, min(2800, 360 + (max_cards_aba * 210)))
+    texto_todos = "\n\n".join([x for x in textos_todos if x])
+    qtd_cards = len(cards_html)
+    linhas = max(1, math.ceil(qtd_cards / 3))
+    altura = max(720, min(2600, 170 + (linhas * 205)))
 
     html_component = f"""
 <!DOCTYPE html>
@@ -5378,16 +5284,18 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         background:transparent;
         color:#f8fafc;
         font-family:Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        overflow:hidden;
     }}
-    .dados-tabs-wrap{{
+    .dados-wrap{{
         width:100%;
+        padding:0;
     }}
     .dados-topbar{{
         display:flex;
         justify-content:space-between;
         gap:14px;
         align-items:center;
-        margin:0 0 14px 0;
+        margin:0 0 16px 0;
     }}
     .dados-topbar-title{{
         display:flex;
@@ -5404,7 +5312,7 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         font-size:12px;
         font-weight:800;
     }}
-    .copy-all-btn, .copy-tab-btn{{
+    .copy-all-btn{{
         border:1px solid rgba(215,191,117,.36);
         background:linear-gradient(135deg,rgba(0,77,61,.95),rgba(6,95,70,.88));
         color:#fff;
@@ -5415,84 +5323,12 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         box-shadow:0 10px 24px rgba(0,0,0,.22);
         white-space:nowrap;
     }}
-    .copy-tab-btn{{
-        padding:8px 12px;
-        font-size:12px;
-        border-radius:12px;
-    }}
-    .copy-all-btn:hover, .copy-tab-btn:hover{{filter:brightness(1.12);transform:translateY(-1px);}}
-    .tabs-nav{{
-        display:grid;
-        grid-template-columns:repeat(5,minmax(0,1fr));
-        gap:10px;
-        margin:0 0 16px 0;
-    }}
-    .tab-btn{{
-        border:1px solid rgba(215,191,117,.22);
-        background:linear-gradient(145deg,rgba(16,24,34,.98),rgba(10,17,24,.98));
-        color:#d8dee9;
-        border-radius:16px;
-        padding:12px 12px;
-        cursor:pointer;
-        text-align:left;
-        min-height:68px;
-        transition:.18s ease;
-        box-shadow:0 10px 22px rgba(0,0,0,.18);
-    }}
-    .tab-btn span{{
-        display:block;
-        color:#f8fafc;
-        font-weight:950;
-        font-size:13px;
-        line-height:1.25;
-        margin-bottom:5px;
-    }}
-    .tab-btn small{{
-        color:#94a3b8;
-        font-size:11px;
-        font-weight:900;
-    }}
-    .tab-btn:hover{{
-        border-color:rgba(215,191,117,.46);
-        transform:translateY(-1px);
-    }}
-    .tab-btn.active{{
-        background:linear-gradient(135deg,rgba(0,77,61,.98),rgba(6,95,70,.82));
-        border-color:rgba(215,191,117,.55);
-        box-shadow:0 0 0 1px rgba(215,191,117,.10),0 14px 30px rgba(0,0,0,.26);
-    }}
-    .tab-panel{{
-        border:1px solid rgba(215,191,117,.18);
-        border-radius:22px;
-        padding:16px;
-        background:linear-gradient(145deg,rgba(8,13,19,.54),rgba(6,11,16,.44));
-    }}
-    .tab-panel-head{{
-        display:flex;
-        align-items:flex-start;
-        justify-content:space-between;
-        gap:12px;
-        margin:0 0 14px 0;
-        padding:0 2px 12px 2px;
-        border-bottom:1px solid rgba(215,191,117,.12);
-    }}
-    .tab-panel-head h3{{
-        margin:0 0 4px 0;
-        color:#d7bf75;
-        font-size:18px;
-        line-height:1.2;
-        font-weight:950;
-    }}
-    .tab-panel-head p{{
-        margin:0;
-        color:#94a3b8;
-        font-size:12px;
-        font-weight:800;
-    }}
+    .copy-all-btn:hover{{filter:brightness(1.12);transform:translateY(-1px);}}
     .info-grid{{
         display:grid;
         grid-template-columns:repeat(3, minmax(0, 1fr));
         gap:16px;
+        align-items:stretch;
     }}
     .valor-card{{
         background:linear-gradient(145deg,#101821,#0b1118);
@@ -5500,7 +5336,7 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         border-radius:18px;
         padding:18px;
         padding-right:54px;
-        min-height:152px;
+        min-height:176px;
         box-shadow:0 10px 28px rgba(0,0,0,.24);
         position:relative;
         overflow:hidden;
@@ -5533,7 +5369,7 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         transition:.18s ease;
     }}
     .copy-card-btn:hover{{background:rgba(215,191,117,.16);transform:translateY(-1px);}}
-    .copy-card-btn.ok, .copy-all-btn.ok, .copy-tab-btn.ok{{background:rgba(16,185,129,.22);border-color:rgba(16,185,129,.45);color:#ecfdf5;}}
+    .copy-card-btn.ok, .copy-all-btn.ok{{background:rgba(16,185,129,.22);border-color:rgba(16,185,129,.45);color:#ecfdf5;}}
     .valor-titulo{{
         color:#d7bf75;
         font-weight:950;
@@ -5587,55 +5423,39 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
     }}
     .copy-toast.show{{opacity:1;transform:translateY(0);}}
     @media(max-width:1180px){{
-        .tabs-nav{{grid-template-columns:repeat(3,minmax(0,1fr));}}
         .info-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}
     }}
     @media(max-width:760px){{
-        .dados-topbar,.tab-panel-head{{flex-direction:column;align-items:stretch;}}
-        .copy-all-btn,.copy-tab-btn{{width:100%;}}
-        .tabs-nav{{grid-template-columns:1fr;}}
+        .dados-topbar{{flex-direction:column;align-items:stretch;}}
+        .copy-all-btn{{width:100%;}}
         .info-grid{{grid-template-columns:1fr;}}
     }}
 </style>
 </head>
 <body>
-    <div class="dados-tabs-wrap">
+    <div class="dados-wrap">
         <div class="dados-topbar">
             <div class="dados-topbar-title">
-                <strong>Dados organizados por categoria</strong>
-                <span>Use as abas para consultar cada bloco da análise sem poluir a tela.</span>
+                <strong>Informações principais do contrato</strong>
+                <span>Campos extraídos pela análise. Use o botão de cada card para copiar uma informação específica.</span>
             </div>
             <button type="button" class="copy-all-btn" data-copy="{html.escape(texto_todos, quote=True)}">⧉ Copiar todos os dados extraídos</button>
         </div>
-        <nav class="tabs-nav">{''.join(nav_tabs)}</nav>
-        {''.join(panels)}
+        <div class="info-grid">{''.join(cards_html)}</div>
     </div>
     <div id="copy-toast" class="copy-toast">Informação copiada</div>
 <script>
 (function(){{
     function ajustarAlturaComponente(){{
-        const h = Math.max(
-            document.body.scrollHeight || 0,
-            document.documentElement.scrollHeight || 0
-        ) + 24;
-        window.parent.postMessage({{
-            isStreamlitMessage: true,
-            type: 'streamlit:setFrameHeight',
-            height: h
-        }}, '*');
-        window.parent.postMessage({{
-            type: 'streamlit:setFrameHeight',
-            height: h
-        }}, '*');
+        const h = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0) + 20;
+        window.parent.postMessage({{isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h}}, '*');
+        window.parent.postMessage({{type: 'streamlit:setFrameHeight', height: h}}, '*');
     }}
-
     window.addEventListener('load', ajustarAlturaComponente);
     window.addEventListener('resize', ajustarAlturaComponente);
     setTimeout(ajustarAlturaComponente, 150);
     setTimeout(ajustarAlturaComponente, 600);
-    if (window.ResizeObserver) {{
-        new ResizeObserver(ajustarAlturaComponente).observe(document.body);
-    }}
+    if (window.ResizeObserver) {{ new ResizeObserver(ajustarAlturaComponente).observe(document.body); }}
 
     function showToast(msg){{
         const toast = document.getElementById('copy-toast');
@@ -5643,7 +5463,6 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         toast.classList.add('show');
         setTimeout(() => toast.classList.remove('show'), 1400);
     }}
-
     function fallbackCopy(text){{
         const area = document.createElement('textarea');
         area.value = text;
@@ -5655,33 +5474,10 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         try {{ document.execCommand('copy'); }} catch(e) {{}}
         document.body.removeChild(area);
     }}
-
     async function copiar(text){{
-        if (navigator.clipboard && window.isSecureContext) {{
-            await navigator.clipboard.writeText(text);
-        }} else {{
-            fallbackCopy(text);
-        }}
+        if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); }}
+        else {{ fallbackCopy(text); }}
     }}
-
-    document.querySelectorAll('.tab-btn').forEach((btn) => {{
-        btn.addEventListener('click', () => {{
-            const tab = btn.getAttribute('data-tab');
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.tab-panel').forEach(p => {{
-                p.classList.remove('active');
-                p.style.display = 'none';
-            }});
-            btn.classList.add('active');
-            const panel = document.getElementById('panel-' + tab);
-            if (panel) {{
-                panel.classList.add('active');
-                panel.style.display = '';
-            }}
-            setTimeout(ajustarAlturaComponente, 50);
-        }});
-    }});
-
     document.querySelectorAll('[data-copy]').forEach((btn) => {{
         btn.addEventListener('click', async () => {{
             const text = btn.getAttribute('data-copy') || '';
@@ -5692,26 +5488,14 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
                 btn.classList.add('ok');
                 const original = btn.textContent;
                 btn.textContent = '✓';
-                setTimeout(() => {{
-                    card.classList.remove('copiado');
-                    btn.classList.remove('ok');
-                    btn.textContent = original;
-                }}, 1100);
+                setTimeout(() => {{ card.classList.remove('copiado'); btn.classList.remove('ok'); btn.textContent = original; }}, 1100);
+                showToast('Campo copiado');
             }} else {{
                 btn.classList.add('ok');
                 const original = btn.textContent;
                 btn.textContent = '✓ Copiado';
-                setTimeout(() => {{
-                    btn.classList.remove('ok');
-                    btn.textContent = original;
-                }}, 1100);
-            }}
-            if (btn.classList.contains('copy-all-btn')) {{
+                setTimeout(() => {{ btn.classList.remove('ok'); btn.textContent = original; }}, 1100);
                 showToast('Todos os dados foram copiados');
-            }} else if (btn.classList.contains('copy-tab-btn')) {{
-                showToast('Dados da aba copiados');
-            }} else {{
-                showToast('Campo copiado');
             }}
         }});
     }});
@@ -5721,6 +5505,131 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
 </html>
 """
     components.html(html_component, height=altura, scrolling=False)
+
+
+def render_checklist_validacao(resultado: Dict[str, Any]) -> None:
+    st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
+    df_checklist = pd.DataFrame(resultado.get("checklist", []))
+    if df_checklist.empty:
+        st.info("Checklist detalhado não disponível para este registro.")
+    else:
+        st.dataframe(df_checklist, use_container_width=True, hide_index=True)
+
+
+def render_pendencias_encontradas(resultado: Dict[str, Any]) -> None:
+    st.markdown('<div class="section-title">Pendências encontradas</div>', unsafe_allow_html=True)
+    pendencias = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
+    if pendencias:
+        for i, pendencia in enumerate(pendencias, 1):
+            st.markdown(
+                f"""
+                <div class="risk-row">
+                    <b>{i}. {safe(pendencia.get('Pendência', 'Pendência'))}</b><br>
+                    Crítico: {safe(pendencia.get('Crítico', 'N/A'))} • Risco: {safe(pendencia.get('Risco', 'N/A'))}<br>
+                    <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown('<div class="ok-row">Nenhuma pendência crítica localizada.</div>', unsafe_allow_html=True)
+
+
+def render_parecer_automatico(resultado: Dict[str, Any]) -> None:
+    st.markdown('<div class="section-title">Parecer automático</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="executive-box"><b>Parecer:</b><br><br>{safe(resultado.get("parecer"))}</div>', unsafe_allow_html=True)
+
+
+def render_resumo_executivo_aba(resultado: Dict[str, Any]) -> None:
+    """Mostra o resumo executivo com aparência de informação, não de erro."""
+    st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
+    resumo = resultado.get("resumo_executivo") or resultado.get("parecer") or "Resumo executivo não localizado."
+    risco = normalize_risco(resultado.get("risco"))
+    score = resultado.get("score") or "Não localizado"
+    status = resultado.get("status") or "Não localizado"
+
+    html_resumo = f"""
+        <div class="executive-box" style="border-left:4px solid #d7bf75; background:linear-gradient(135deg, rgba(0,77,61,.52), rgba(16,22,32,.92));">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px;">
+                <div>
+                    <div style="font-size:12px; color:#d7bf75; font-weight:900; letter-spacing:.08em; text-transform:uppercase;">Síntese da análise</div>
+                    <div style="font-size:22px; font-weight:950; color:#fff; margin-top:4px;">Contrato analisado com visão executiva</div>
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <span class="pill pill-ok">Status: {safe(status)}</span>
+                    <span class="pill pill-ok">Risco: {safe(risco)}</span>
+                    <span class="pill pill-ok">Score: {safe(score)}</span>
+                </div>
+            </div>
+            <div style="font-size:15px; line-height:1.65; color:#fff; font-weight:800;">
+                {safe(resumo)}
+            </div>
+        </div>
+    """
+    st.markdown(html_resumo, unsafe_allow_html=True)
+
+
+def render_texto_extraido_aba(resultado: Dict[str, Any], texto_extraido: str = "", key_prefix: str = "texto_resultado") -> None:
+    """Mostra o texto extraído em aba própria para não poluir a análise principal."""
+    st.markdown('<div class="section-title">Texto extraído do contrato e anexos</div>', unsafe_allow_html=True)
+    texto = texto_extraido or str(resultado.get("texto_extraido") or "Texto extraído não disponível para este registro.")
+    st.caption("Use esta aba apenas para auditoria técnica ou conferência do conteúdo lido pelo robô.")
+    st.text_area("Texto extraído", texto[:50000], height=360, key=f"{key_prefix}_{id(resultado)}")
+
+
+def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = "", key_prefix: str = "resultado") -> None:
+    """Organiza o resultado completo em abas por seção da análise.
+
+    Estrutura desejada:
+    - Resumo executivo
+    - Informações em caixas
+    - Aditivos
+    - Materiais/Serviços
+    - Checklist de validação
+    - Pendências
+    - Parecer automático
+    - Texto extraído
+    """
+    tab_resumo, tab_infos, tab_aditivos, tab_materiais, tab_checklist, tab_pendencias, tab_parecer, tab_texto = st.tabs([
+        "📊 Resumo executivo",
+        "📌 Informações em caixas",
+        "🧩 Aditivos",
+        "📦 Materiais/Serviços",
+        "✅ Checklist",
+        "⚠️ Pendências",
+        "📝 Parecer",
+        "📄 Texto extraído",
+    ])
+
+    with tab_resumo:
+        render_resumo_executivo_aba(resultado)
+
+    with tab_infos:
+        st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
+        render_info_grid_com_copy(resultado)
+        st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>',
+            unsafe_allow_html=True,
+        )
+
+    with tab_aditivos:
+        render_aditivos_contrato(resultado)
+
+    with tab_materiais:
+        render_itens_contrato(resultado)
+
+    with tab_checklist:
+        render_checklist_validacao(resultado)
+
+    with tab_pendencias:
+        render_pendencias_encontradas(resultado)
+
+    with tab_parecer:
+        render_parecer_automatico(resultado)
+
+    with tab_texto:
+        render_texto_extraido_aba(resultado, texto_extraido, key_prefix=key_prefix)
 
 # =========================================================
 # POPUP AO VIVO DE PROCESSAMENTO
@@ -7059,52 +6968,13 @@ def render_analise_completa_historico(row: pd.Series) -> None:
     if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
         st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
 
-    st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
-    st.markdown(f'<span class="pill {pill}">{safe(resultado.get("resumo_executivo"))}</span>', unsafe_allow_html=True)
-
     render_triagem_anexos(resultado)
 
-    st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
-    render_info_grid_com_copy(resultado)
-
-    st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material") or resultado.get("objetivo"))}</div>', unsafe_allow_html=True)
-
-    # No histórico, mostra as mesmas seções da Nova Análise.
-    # Antes essas informações ficavam salvas no resultado_json, mas não eram renderizadas na tela.
-    render_aditivos_contrato(resultado)
-    render_itens_contrato(resultado)
-
-    st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
-    df_checklist = pd.DataFrame(resultado.get("checklist", []))
-    if df_checklist.empty:
-        st.info("Checklist detalhado não disponível para este registro.")
-    else:
-        st.dataframe(df_checklist, use_container_width=True, hide_index=True)
-
-    st.markdown('<div class="section-title">Pendências encontradas</div>', unsafe_allow_html=True)
-    pendencias = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
-    if pendencias:
-        for i, pendencia in enumerate(pendencias, 1):
-            st.markdown(
-                f"""
-                <div class="risk-row">
-                    <b>{i}. {safe(pendencia.get('Pendência', 'Pendência'))}</b><br>
-                    Crítico: {safe(pendencia.get('Crítico', 'N/A'))} • Risco: {safe(pendencia.get('Risco', 'N/A'))}<br>
-                    <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown('<div class="ok-row">Nenhuma pendência crítica localizada.</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Parecer automático</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="executive-box"><b>Parecer:</b><br><br>{safe(resultado.get("parecer"))}</div>', unsafe_allow_html=True)
-
-    with st.expander("📄 Ver texto extraído do contrato e anexos"):
-        texto = texto_extraido or str(resultado.get("texto_extraido") or "Texto extraído não disponível para este registro.")
-        st.text_area("Texto extraído", texto[:50000], height=320, key=f"texto_historico_{row.get('id', id(row))}")
+    render_resultado_em_abas(
+        resultado,
+        texto_extraido=texto_extraido,
+        key_prefix=f"texto_historico_{row.get('id', id(row))}",
+    )
 
     st.download_button(
         "📥 Baixar relatório Excel completo",
@@ -7945,45 +7815,13 @@ if pagina == "📄 Nova Análise":
             if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
                 st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
 
-            st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
-            st.markdown(f'<span class="pill {pill}">{safe(resultado.get("resumo_executivo"))}</span>', unsafe_allow_html=True)
-
             render_triagem_anexos(resultado)
 
-            st.markdown('<div class="section-title">Dados extraídos</div>', unsafe_allow_html=True)
-            render_info_grid_com_copy(resultado)
-
-            st.markdown('<div class="section-title">Objeto / Escopo</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="executive-box">{safe(resultado.get("descricao_servico_material"))}</div>', unsafe_allow_html=True)
-
-            render_aditivos_contrato(resultado)
-            render_itens_contrato(resultado)
-
-            st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
-            df_checklist = pd.DataFrame(resultado.get("checklist", []))
-            st.dataframe(df_checklist, use_container_width=True, hide_index=True)
-
-            st.markdown('<div class="section-title">Pendências encontradas</div>', unsafe_allow_html=True)
-            if resultado.get("pendencias"):
-                for pendencia in resultado.get("pendencias", []):
-                    st.markdown(
-                        f"""
-                        <div class="risk-row">
-                            <b>{safe(pendencia.get('Pendência', 'Pendência'))}</b><br>
-                            Crítico: {safe(pendencia.get('Crítico', 'N/A'))} • Risco: {safe(pendencia.get('Risco', 'N/A'))}<br>
-                            <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-            else:
-                st.markdown('<div class="ok-row">Nenhuma pendência crítica localizada.</div>', unsafe_allow_html=True)
-
-            st.markdown('<div class="section-title">Parecer automático</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="executive-box"><b>Parecer:</b><br><br>{safe(resultado.get("parecer"))}</div>', unsafe_allow_html=True)
-
-            with st.expander("Ver texto extraído do contrato e anexos"):
-                st.text_area("Texto", texto[:50000], height=320)
+            render_resultado_em_abas(
+                resultado,
+                texto_extraido=texto,
+                key_prefix="texto_nova_analise",
+            )
 
             excel = gerar_excel(resultado, texto)
             st.download_button(
