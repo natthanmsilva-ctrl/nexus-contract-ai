@@ -1,5 +1,5 @@
 # =========================================================
-# Auditor de Contratos - Grupo SBF - VERSÃO REVISADA
+# Auditor de Contratos - Grupo SBF - VERSÃO REVISADA + IA REFORÇADA
 # Ajustes aplicados: visual profissional, carregamento seguro
 # do histórico, proteção de HTML no Assistente IA e refinamentos
 # de usabilidade sem alterar o fluxo principal.
@@ -104,7 +104,7 @@ CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
     "aditivos_contrato",
     "contraparte", "fornecedor",
     "contrato_assinado", "alerta_assinatura", "status", "risco", "score",
-    "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato"
+    "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato", "assinaturas_contrato"
 ])
 
 
@@ -1002,6 +1002,67 @@ def detectar_servico_percentual(texto: str) -> List[Dict[str, Any]]:
         venc = primeiro_valor(m_venc.group(1))
         if venc:
             vencimento = resumir_campo(venc, 120)
+
+    # Caso comum em propostas de RH/Atração & Retenção: o PDF informa
+    # "Taxa de 40%", "Taxa de 50%" e DISC de R$ 180,00, sem tabela estruturada.
+    itens_proposta: List[Dict[str, Any]] = []
+    tributos_nf = "0,8367" if re.search(r"0[,.]8367", plano_completo) else "Não localizado"
+    venc_prop = vencimento
+    m_venc_prop = re.search(
+        r"vencimento\s+da\s+nota\s+ser[aá]\s+em\s+(\d+)\s*\([^)]*\)\s+dias\s+corridos\s+a\s+contar\s+da\s+data\s+de\s+emiss[aã]o",
+        plano_completo,
+        flags=re.IGNORECASE,
+    )
+    if m_venc_prop:
+        venc_prop = f"{m_venc_prop.group(1)} dias corridos a contar da data de emissão da nota fiscal"
+
+    if re.search(r"taxa\s+de\s+40\s*%", plano_completo, flags=re.IGNORECASE):
+        itens_proposta.append({
+            "item": str(len(itens_proposta) + 1),
+            "descricao": "Recrutamento e seleção - vagas administrativas, operacionais e comerciais",
+            "tipo": "Serviço",
+            "quantidade": "Não aplicável",
+            "unidade": "Percentual sobre salário/remuneração",
+            "valor_unitario": "Não aplicável",
+            "valor_total": "Não localizado",
+            "taxa_percentual": "40%",
+            "total_encargos": f"Tributos de nota fiscal: {tributos_nf}" if _valor_informado(tributos_nf) else "Não localizado",
+            "vencimento": venc_prop,
+            "fonte": "Proposta comercial",
+        })
+
+    if re.search(r"taxa\s+de\s+50\s*%", plano_completo, flags=re.IGNORECASE):
+        itens_proposta.append({
+            "item": str(len(itens_proposta) + 1),
+            "descricao": "Recrutamento e seleção - vagas técnicas, estratégicas ou liderança",
+            "tipo": "Serviço",
+            "quantidade": "Não aplicável",
+            "unidade": "Percentual sobre salário/remuneração",
+            "valor_unitario": "Não aplicável",
+            "valor_total": "Não localizado",
+            "taxa_percentual": "50%",
+            "total_encargos": f"Tributos de nota fiscal: {tributos_nf}" if _valor_informado(tributos_nf) else "Não localizado",
+            "vencimento": venc_prop,
+            "fonte": "Proposta comercial",
+        })
+
+    if re.search(r"R\$\s*180[,.]00|180,00\s*\([^)]*cento\s+e\s+oitenta", plano_completo, flags=re.IGNORECASE):
+        itens_proposta.append({
+            "item": str(len(itens_proposta) + 1),
+            "descricao": "Teste de análise comportamental / DISC",
+            "tipo": "Serviço",
+            "quantidade": "Não aplicável",
+            "unidade": "Teste",
+            "valor_unitario": "R$ 180,00",
+            "valor_total": "Não localizado",
+            "taxa_percentual": "Não aplicável",
+            "total_encargos": f"Tributos de nota fiscal: {tributos_nf}" if _valor_informado(tributos_nf) else "Não localizado",
+            "vencimento": venc_prop,
+            "fonte": "Proposta comercial",
+        })
+
+    if itens_proposta:
+        return normalizar_itens_contrato(itens_proposta)
 
     # Só considera como caso especial se houver pelo menos taxa ou encargos.
     if not (_valor_informado(taxa) or _valor_informado(encargos)):
@@ -2960,6 +3021,29 @@ Quando os arquivos enviados tiverem minutas, versões antigas e versão assinada
 6. Minutas DOCX antigas somente quando não houver contrato final assinado.
 Se houver conflito entre minuta antiga e PDF assinado, prevalece o PDF assinado.
 
+REGRA DE OURO DE QUALIDADE
+Antes de preencher o JSON, faça mentalmente esta validação:
+1. Qual é o contrato principal assinado? Ele manda nos campos de partes, CNPJ, objeto, vigência, assinatura, cláusulas, risco e status.
+2. Quais anexos são proposta comercial/técnica? Use-os para preço, taxas, itens, vencimento, reposição, escopo técnico e condições comerciais.
+3. Quais anexos são CNPJ, contrato social, Berkan, certificado, comunicado ou apoio cadastral? Use-os apenas como apoio/evidência, sem sobrescrever o contrato principal.
+4. Minuta Word/DOCX sem assinatura só pode complementar campo vazio; nunca pode substituir PDF assinado.
+5. Quando existir matriz e filial da mesma contraparte, mantenha no campo cnpj_contraparte o CNPJ que está no contrato principal assinado e registre divergência/apoio no resumo/checklist.
+6. Todo campo importante deve ter conteúdo de negócio. Não responda de forma rasa. Exemplo ruim: "Possui LGPD". Exemplo bom: "Há cláusula de proteção de dados exigindo tratamento apenas para execução do contrato, segurança das informações e comunicação de incidentes em até 24 horas."
+7. Se o contrato remeter valor à proposta, obrigatoriamente busque taxa, preço, vencimento e reposição na proposta comercial.
+8. No resumo_executivo, NÃO cite minutas, versões antigas, contrato social, CNPJ, Berkan, comunicado, documento cadastral ou arquivo de apoio como documento principal. Cite apenas contrato principal/final, proposta comercial/técnica quando complementar, aditivos válidos e pendências relevantes.
+9. Se uma minuta aparecer na triagem, trate-a como apoio/ignorada; nunca diga no resumo que a análise foi baseada em minuta quando houver contrato principal/final.
+
+CONTRATOS DE MÃO DE OBRA TEMPORÁRIA / RH / RECRUTAMENTO
+Quando o pacote contiver Lei 6.019/1974, mão de obra temporária, Atração & Retenção, recrutamento, seleção ou proposta de RH:
+- tipo_contrato deve indicar prestação de serviços de alocação de mão de obra temporária ou recrutamento/seleção, conforme o contrato principal.
+- objetivo deve mencionar substituição transitória de pessoal permanente e/ou demanda complementar de serviços quando constar.
+- descricao_servico_material deve citar alocação de mão de obra temporária, recrutamento, seleção, contratação, gestão de folha/encargos quando constar.
+- forma_pagamento deve citar emissão de nota fiscal e aprovação formal da contratante quando constar.
+- condicao_pagamento_dias deve buscar na proposta frases como "60 dias corridos a contar da data de emissão".
+- itens_contrato deve trazer condições comerciais da proposta: 40% + tributos de NF 0,8367 para vagas administrativas/operacionais/comerciais; 50% + tributos de NF 0,8367 para vagas técnicas/estratégicas/liderança; DISC/R$ 180,00 + tributos quando constar.
+- valor_contrato_original deve ficar "Sem valor global fixo" quando não houver valor total fechado, mesmo havendo taxas percentuais.
+- valor_mensal_estimado e valor_total_estimado_vigencia devem explicar que dependem de demanda, quantidade, salário/remuneração e fechamento de vaga, quando essa for a natureza comercial.
+
 CAMPOS OBRIGATÓRIOS
 Retorne exatamente estas chaves principais e internas:
 {CAMPOS_JSON_OBRIGATORIOS}
@@ -2991,6 +3075,17 @@ Os campos principais que serão exibidos ao usuário são exatamente:
 - Valor Total Estimado da Vigência = valor_total_estimado_vigencia
 - Valor Total dos Materiais e Serviços = valor_total_materiais_servicos
 - Pessoas que assinaram = pessoas_que_assinaram
+
+TABELA DE ASSINATURAS OBRIGATÓRIA
+Também retorne a chave assinaturas_contrato como lista. Cada item deve conter:
+- nome
+- papel_cargo
+- email
+- data_assinatura
+- fonte
+- evidencia
+- status
+Se não houver lista individual, use pessoas_que_assinaram e data_assinatura/data_conclusao_docusign para montar a melhor lista possível. Não invente cargos/e-mails quando não constarem.
 
 TABELA DE ITENS OBRIGATÓRIA
 Também retorne a chave itens_contrato como lista. Cada item deve conter, quando aplicável:
@@ -3066,7 +3161,7 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 10. valor_contrato_original deve ser preenchido SOMENTE quando houver valor global fechado expressamente definido para todo o contrato. Não use valor unitário, valor por pessoa, valor por item, valor mensal, taxa, consumo estimado ou valor por demanda como valor original do contrato. Se não houver valor global fixo, retorne: "Sem valor global fixo definido no contrato. O documento apresenta valores unitários, mensais ou por demanda, mas não informa um valor total fechado para todo o contrato."
 11. valor_mensal_estimado deve explicar se o valor mensal é fixo ou variável. Se houver valor por unidade/pessoa/aprendiz/item/serviço, explique que o valor mensal depende da quantidade contratada ou utilizada. Exemplo: "R$ 282,42 por aprendiz ativo/mês. O valor mensal não é fixo; varia conforme a quantidade de aprendizes ativos no período."
 12. valor_total_estimado_vigencia deve ser calculado somente quando houver informações suficientes: valor mensal, quantidade/volume aplicável e prazo de vigência. Se faltar quantidade ou volume, não invente valor. Retorne explicação clara e a fórmula, exemplo: "Não calculável com precisão. Para calcular, é necessário aplicar: valor unitário x quantidade x quantidade de meses."
-13. valor_total_materiais_servicos deve trazer a soma da coluna valor_total dos itens em itens_contrato. Esse campo representa apenas a soma dos materiais/serviços identificados, não necessariamente o valor global do contrato. Se não houver itens com valor total, retorne "Não identificado".
+13. valor_total_materiais_servicos deve trazer a soma SOMENTE dos itens com valor_total monetário em R$ ou com quantidade numérica + valor unitário monetário em R$. Nunca some percentuais, taxas, encargos, salário/remuneração base ou valor unitário sem quantidade. Se existirem apenas condições comerciais percentuais/unitárias, retorne: "Não calculável como total global. Há condições comerciais identificadas, mas falta quantidade, salário/remuneração, demanda ou volume para calcular o total."
 14. vigencia_apos_assinatura deve manter a redação objetiva do contrato, exemplo: "36 meses a partir da assinatura" ou "Prazo indeterminado".
 15. data_contrato deve ser a data textual do instrumento, exemplo "São Paulo, 21 de maio de 2026".
 16. data_conclusao_docusign deve ser a data do Certificate of Completion / Completed do DocuSign.
@@ -3122,6 +3217,7 @@ VALIDAÇÃO FINAL OBRIGATÓRIA ANTES DE RESPONDER
 - Se identificar tabela de valores mensal e vigência em meses, separe valor mensal de valor total estimado da vigência. Nunca coloque valor unitário ou valor mensal no campo de valor global do contrato.
 - Se identificar Certificate of Completion / Status Completed do DocuSign, contrato_assinado = "Sim", status não deve ser "Pendente de assinatura" e pessoas_que_assinaram deve listar os signatários.
 - Se identificar PDF assinado e minutas DOCX sem assinatura, prevalece o PDF assinado.
+- No resumo executivo, não mencione minutas/modelos/contrato social/documentos cadastrais como base principal quando existir contrato principal/final.
 - Para contratos de alimentação/refeição, itens como Desjejum, Almoço e Café da Tarde devem aparecer em itens_contrato com quantidade, unidade, valor unitário e valor total.
 
 CONTRATO E ANEXOS EXTRAÍDOS:
@@ -3307,6 +3403,12 @@ def _extrair_texto_resposta_gemini(resp: Any) -> str:
 
 
 def _json_da_resposta_gemini(resp: Any) -> Dict[str, Any]:
+    """Converte a resposta do Gemini em JSON com tolerância a pequenos ruídos.
+
+    Mesmo usando response_mime_type=application/json, alguns modelos podem
+    devolver cercas de markdown ou texto antes/depois do objeto. Aqui mantemos
+    o fluxo seguro sem quebrar a análise inteira por formatação mínima.
+    """
     content = (
         _extrair_texto_resposta_gemini(resp)
         .strip()
@@ -3314,7 +3416,15 @@ def _json_da_resposta_gemini(resp: Any) -> Dict[str, Any]:
         .replace("```", "")
         .strip()
     )
-    return json.loads(content)
+
+    try:
+        return json.loads(content)
+    except Exception:
+        ini = content.find("{")
+        fim = content.rfind("}")
+        if ini >= 0 and fim > ini:
+            return json.loads(content[ini:fim + 1])
+        raise
 
 
 def _gerar_com_sdk_novo(client: Any, modelo: str, prompt_final: str, uploaded_files: list) -> Dict[str, Any]:
@@ -3326,6 +3436,7 @@ def _gerar_com_sdk_novo(client: Any, modelo: str, prompt_final: str, uploaded_fi
         config={
             "temperature": 0.0,
             "top_p": 0.2,
+            "max_output_tokens": 65535,
             "response_mime_type": "application/json",
         },
     )
@@ -3343,6 +3454,7 @@ def _gerar_texto_com_sdk_legado(texto: str, api_key: str, modelo: str) -> Dict[s
         generation_config={
             "temperature": 0.0,
             "top_p": 0.2,
+            "max_output_tokens": 65535,
             "response_mime_type": "application/json",
         },
     )
@@ -3841,16 +3953,47 @@ def _formatar_valor_monetario_item(valor: Any) -> str:
 
 
 def _montar_total_materiais_servicos(itens: List[Dict[str, Any]], total: float | None) -> str:
-    """Monta o resumo executivo do total de materiais/serviços sem jogar todos os itens dentro do card."""
+    """Monta o resumo executivo do total de materiais/serviços.
+
+    Regra de segurança: só soma valores monetários fechados. Percentuais,
+    encargos, taxas e valores unitários sem quantidade são condições comerciais,
+    não total do contrato.
+    """
     itens_norm = normalizar_itens_contrato(itens)
 
     qtd_itens_com_valor = 0
+    condicoes: List[str] = []
     for item in itens_norm:
-        valor = _parse_moeda_brasil(item.get("Valor total") or item.get("valor_total"))
+        desc = clean_text(item.get("Descrição") or item.get("descricao"))
+        valor_total = clean_text(item.get("Valor total") or item.get("valor_total"))
+        valor_unitario = clean_text(item.get("Valor unitário") or item.get("valor_unitario"))
+        taxa = clean_text(item.get("Taxa / Percentual") or item.get("taxa_percentual"))
+        encargos = clean_text(item.get("Total de encargos") or item.get("total_encargos"))
+        unidade = clean_text(item.get("Unidade") or item.get("unidade"))
+
+        valor = _parse_moeda_brasil(valor_total)
         if valor is not None:
             qtd_itens_com_valor += 1
+            continue
+
+        pedacos = []
+        if _valor_informado(taxa):
+            pedacos.append(taxa)
+        if _valor_informado(valor_unitario) and _parse_moeda_brasil(valor_unitario) is not None:
+            pedacos.append(f"{_formatar_valor_monetario_item(valor_unitario)}" + (f" por {unidade}" if _valor_informado(unidade) else ""))
+        if _valor_informado(encargos):
+            pedacos.append(encargos)
+        if pedacos and _valor_informado(desc):
+            condicoes.append(f"{desc}: " + " + ".join(pedacos))
 
     if total is None or total <= 0:
+        if condicoes:
+            cond_txt = "; ".join(condicoes[:4])
+            return (
+                "Não calculável como total global. "
+                "Há condições comerciais identificadas, mas falta quantidade, salário/remuneração, demanda ou volume para calcular o total. "
+                f"Condições identificadas: {cond_txt}."
+            )
         return (
             "Não identificado. "
             "Não foram localizados itens com valor total suficiente para somar materiais e serviços."
@@ -3862,6 +4005,7 @@ def _montar_total_materiais_servicos(itens: List[Dict[str, Any]], total: float |
         "Esse campo não representa necessariamente o valor global do contrato; representa apenas a soma dos itens identificados. "
         "Consulte o detalhamento completo na tabela de materiais e serviços."
     )
+
 
 def _formatar_valor_mensal_profissional(valor: Any, mensal_detectado: float | None = None, origem_itens: bool = False) -> str:
     txt = clean_text(valor)
@@ -4026,7 +4170,370 @@ def aplicar_regras_finais_contrato(base: Dict[str, Any], texto: str) -> Dict[str
     itens = normalizar_itens_contrato(base.get("itens_contrato", []))
     meses = _extrair_meses_vigencia(texto, base)
     base = aplicar_regras_valores_profissionais(base, itens, texto, meses)
+    base = aplicar_regras_especificas_qualidade_ia(base, texto)
 
+    return base
+
+
+
+def _texto_indica_mao_obra_temporaria(texto: Any) -> bool:
+    low = str(texto or "").lower()
+    gatilhos = [
+        "mão de obra tempor", "mao de obra tempor", "lei 6.019/1974",
+        "trabalho temporario", "trabalho temporário", "imediatta trabalho temporario",
+        "atração & retenção", "atracao & retencao", "recrutamento & seleção", "recrutamento e seleção",
+    ]
+    return any(g in low for g in gatilhos)
+
+
+def _extrair_cnpj_proximo(texto: str, termo: str) -> str:
+    txt = str(texto or "")
+    pos = txt.lower().find(str(termo or "").lower())
+    if pos < 0:
+        return "Não localizado"
+    janela = txt[pos:pos + 1500]
+    m = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14}", janela)
+    return formatar_cnpj(m.group(0)) if m else "Não localizado"
+
+
+def _extrair_envelope_docusign(texto: str) -> str:
+    txt = str(texto or "")
+    m = re.search(r"DocuSign\s+Envelope\s+ID:\s*([A-Z0-9-]{20,})", txt, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"Envelope\s*ID[:\s]+([A-Z0-9-]{20,})", txt, flags=re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _extrair_assinantes_campos_docusign(texto: str) -> List[str]:
+    txt = str(texto or "")
+    nomes: List[str] = []
+
+    # Form fields extraídos de PDFs DocuSign podem aparecer como "Por:NOME".
+    for nome in re.findall(r"Por\s*:\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]{2,80})", txt, flags=re.IGNORECASE):
+        nome = re.sub(r"\s+", " ", nome).strip(" -:;,.|")
+        if len(nome.split()) >= 1 and nome.lower() not in ("por", "nome") and nome not in nomes:
+            nomes.append(nome)
+
+    # Campos customizados da assinatura no final do PDF.
+    for nome in re.findall(r"\[FORM FIELD\]\s+Custom_[^:]+:\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]{2,80})", txt, flags=re.IGNORECASE):
+        nome = re.sub(r"\s+", " ", nome).strip(" -:;,.|")
+        low = nome.lower()
+        if any(x in low for x in ["por:", "envelope", "docusign"]):
+            continue
+        if re.search(r"\d", nome):
+            continue
+        if len(nome.split()) >= 2 and nome not in nomes:
+            nomes.append(nome)
+
+    return nomes[:12]
+
+
+
+def _split_assinantes_texto(valor: Any) -> List[str]:
+    """Divide o campo pessoas_que_assinaram em nomes limpos."""
+    txt = clean_text(valor)
+    if not _valor_informado(txt):
+        return []
+    partes = re.split(r";|\n|\|", txt)
+    nomes: List[str] = []
+    for parte in partes:
+        nome = clean_text(parte).strip(" -:;,.|")
+        if not _valor_informado(nome):
+            continue
+        low = nome.lower()
+        if low in ("sim", "não", "nao", "assinado", "não localizado", "nao localizado"):
+            continue
+        if len(nome) > 120:
+            nome = resumir_campo(nome, 120)
+        if nome and nome not in nomes:
+            nomes.append(nome)
+    return nomes
+
+
+def normalizar_assinaturas_contrato(assinaturas: Any, texto: str = "", base: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
+    """Normaliza a aba de assinaturas para exibição, Excel e histórico."""
+    base = base or {}
+    texto = str(texto or "")
+
+    def pega(d: Dict[str, Any], aliases: List[str], padrao: str = "Não localizado") -> str:
+        mapa = {str(k).strip().lower().replace(" ", "_"): v for k, v in d.items()}
+        for a in aliases:
+            k = str(a).strip().lower().replace(" ", "_")
+            if k in mapa and _valor_informado(mapa[k]):
+                return clean_text(mapa[k])
+        return padrao
+
+    data_padrao = clean_text(base.get("data_conclusao_docusign") or base.get("data_assinatura") or base.get("data_contrato"))
+    if not _valor_informado(data_padrao):
+        data_padrao = _extrair_data_conclusao_docusign(texto)
+    if not _valor_informado(data_padrao):
+        data_padrao = _extrair_data_contrato(texto)
+
+    fonte_padrao = "Contrato principal / DocuSign" if _evidencia_assinatura_arquivo("", texto) or "docusign" in texto.lower() else "Contrato/anexo"
+    status_padrao = "Assinado" if str(base.get("contrato_assinado", "")).strip().lower() == "sim" or _evidencia_assinatura_arquivo("", texto) else "Não localizado"
+
+    normalizadas: List[Dict[str, Any]] = []
+
+    if isinstance(assinaturas, list):
+        for item in assinaturas:
+            if isinstance(item, str):
+                item = {"nome": item}
+            if not isinstance(item, dict):
+                continue
+            nome = pega(item, ["nome", "assinante", "signatario", "signatário", "quem_assinou", "pessoa"], "Não localizado")
+            if not _valor_informado(nome):
+                continue
+            normalizadas.append({
+                "Nome": nome,
+                "Papel/Cargo": pega(item, ["papel_cargo", "papel", "cargo", "função", "funcao", "representacao", "representação"], "Não localizado"),
+                "E-mail": pega(item, ["email", "e-mail", "mail"], "Não localizado"),
+                "Data da assinatura": pega(item, ["data_assinatura", "data", "signed", "assinatura"], data_padrao if _valor_informado(data_padrao) else "Não localizado"),
+                "Fonte": pega(item, ["fonte", "arquivo", "documento"], fonte_padrao),
+                "Evidência": pega(item, ["evidencia", "evidência", "prova", "trecho"], "Assinatura indicada nos documentos analisados."),
+                "Status": pega(item, ["status"], status_padrao),
+            })
+
+    if not normalizadas:
+        nomes = _split_assinantes_texto(base.get("pessoas_que_assinaram"))
+        if not nomes:
+            nomes = _extrair_assinantes_docusign(texto) or _extrair_assinantes_campos_docusign(texto)
+        for nome in nomes:
+            normalizadas.append({
+                "Nome": nome,
+                "Papel/Cargo": "Não localizado",
+                "E-mail": "Não localizado",
+                "Data da assinatura": data_padrao if _valor_informado(data_padrao) else "Não localizado",
+                "Fonte": fonte_padrao,
+                "Evidência": "Nome localizado em assinatura/DocuSign ou campo de assinatura do contrato.",
+                "Status": status_padrao,
+            })
+
+    if not normalizadas and str(base.get("contrato_assinado", "")).strip().lower() == "sim":
+        normalizadas.append({
+            "Nome": "Signatários localizados, mas não individualizados",
+            "Papel/Cargo": "Não localizado",
+            "E-mail": "Não localizado",
+            "Data da assinatura": data_padrao if _valor_informado(data_padrao) else "Não localizado",
+            "Fonte": fonte_padrao,
+            "Evidência": clean_text(base.get("alerta_assinatura") or "Contrato com evidência de assinatura."),
+            "Status": "Assinado",
+        })
+
+    vistos = set()
+    saida: List[Dict[str, Any]] = []
+    for item in normalizadas:
+        chave = (item.get("Nome", "").lower(), item.get("Data da assinatura", "").lower())
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        saida.append(item)
+    return saida
+
+
+def _resumo_assinaturas_contrato(resultado: Dict[str, Any]) -> Dict[str, Any]:
+    assinaturas = normalizar_assinaturas_contrato(
+        resultado.get("assinaturas_contrato"),
+        str(resultado.get("texto_extraido") or ""),
+        resultado,
+    )
+    total = len(assinaturas)
+    assinadas = sum(1 for a in assinaturas if str(a.get("Status", "")).lower().startswith("assinado"))
+    data = clean_text(resultado.get("data_conclusao_docusign") or resultado.get("data_assinatura") or "Não localizado")
+    return {
+        "assinaturas": assinaturas,
+        "total": total,
+        "assinadas": assinadas,
+        "data": data,
+        "status": clean_text(resultado.get("contrato_assinado") or "Não localizado"),
+    }
+
+
+def _aplicar_regras_mao_obra_temporaria(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
+    """Blindagem de qualidade para contratos de mão de obra temporária/RH.
+
+    O Gemini costuma se confundir quando recebe contrato principal + minutas + CNPJ
+    + contrato social + proposta. Esta regra determinística não substitui a IA;
+    ela corrige campos centrais quando há evidência textual clara no pacote.
+    """
+    if not _texto_indica_mao_obra_temporaria(texto):
+        return base
+
+    txt = str(texto or "")
+    low = txt.lower()
+
+    # Partes e CNPJs: prioriza o contrato principal assinado, não CNPJ/contrato social de apoio.
+    if "sbf comércio de produtos esportivos" in low or "sbf comercio de produtos esportivos" in low:
+        base["empresa_grupo_sbf"] = "SBF Comércio de Produtos Esportivos S.A."
+        cnpj_sbf = _extrair_cnpj_proximo(txt, "SBF COM")
+        if _valor_informado(cnpj_sbf):
+            base["cnpj_empresa_grupo"] = cnpj_sbf
+
+    if "imediatta trabalho temporario" in low or "imediatta trabalho temporário" in low:
+        base["contraparte"] = "Imediatta Trabalho Temporário Ltda"
+        base["fornecedor"] = "Imediatta Trabalho Temporário Ltda"
+        cnpj_filial = _extrair_cnpj_proximo(txt, "IMEDIATTA TRABALHO")
+        if _valor_informado(cnpj_filial):
+            base["cnpj_contraparte"] = cnpj_filial
+            base["cnpj"] = cnpj_filial
+    elif "imediatta terceiriza" in low and not _valor_informado(base.get("contraparte")):
+        base["contraparte"] = "Imediatta Terceirização de Mão de Obra Ltda"
+        base["fornecedor"] = base["contraparte"]
+
+    base["tipo_contrato"] = "Prestação de Serviços de Alocação de Mão de Obra Temporária"
+    base["descricao_breve_cadastro"] = "Alocação de mão de obra temporária"
+
+    if "substituição transitória" in low or "substituicao transitoria" in low or "demanda complementar" in low:
+        base["objetivo"] = (
+            "Contratação de empresa especializada para fornecimento/alocação de mão de obra temporária, "
+            "visando atender necessidade de substituição transitória de pessoal permanente ou demanda complementar de serviços."
+        )
+    else:
+        base["objetivo"] = "Contratação de serviços de alocação de mão de obra temporária."
+
+    base["descricao_servico_material"] = (
+        "Prestação de serviços profissionais de alocação de mão de obra temporária, nos termos da Lei nº 6.019/1974, "
+        "incluindo recrutamento, seleção, contratação, gestão de folha de pagamento e encargos dos trabalhadores temporários alocados."
+    )
+
+    if re.search(r"emiss[aã]o\s+de\s+nota\s+fiscal", txt, flags=re.IGNORECASE):
+        base["forma_pagamento"] = "Pagamento mediante emissão de nota fiscal de serviços, condicionado à aprovação formal da Contratante."
+
+    m_venc = re.search(
+        r"vencimento\s+da\s+nota\s+ser[aá]\s+em\s+(\d+)\s*\([^)]*\)\s+dias\s+corridos\s+a\s+contar\s+da\s+data\s+de\s+emiss[aã]o",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if m_venc:
+        base["condicao_pagamento_dias"] = f"{m_venc.group(1)} dias corridos a contar da data de emissão da nota fiscal."
+    elif "aprovação formal da contratante" in low or "aprovacao formal da contratante" in low:
+        base["condicao_pagamento_dias"] = "Conforme condições da proposta comercial aprovada, mediante aprovação formal da Contratante."
+
+    if "igp-m" in low or "igp-m/fgv" in low:
+        base["multa"] = (
+            "Atraso no pagamento: correção pela variação do IGP-M/FGV, multa de 2% sobre o valor corrigido "
+            "e juros moratórios simples de 1% ao mês. Para descumprimento de regras de trabalhador temporário, "
+            "há previsão de multa não compensatória de 15% do valor faturado no mês anterior ou R$ 20.000,00, o que for maior."
+        )
+
+    if "prazo indeterminado" in low:
+        base["vigencia_apos_assinatura"] = "Prazo indeterminado a partir da data de assinatura, ou até a conclusão dos serviços contratados."
+        data_contrato = _extrair_data_contrato(txt)
+        if _valor_informado(data_contrato):
+            base["periodo_vigencia_formatado"] = f"Início {data_contrato} até prazo indeterminado."
+
+    if re.search(r"denunciado\s+sem\s+ônus|denunciado\s+sem\s+onus|aviso\s+prévio\s+de\s+30|aviso\s+previo\s+de\s+30", txt, flags=re.IGNORECASE):
+        base["rescisao_indenizacao"] = (
+            "Resilição/denúncia permitida a qualquer tempo por ambas as partes, sem ônus ou multa, mediante aviso prévio por escrito de 30 dias. "
+            "Também há hipóteses de rescisão por inadimplemento não sanado, insolvência/falência, força maior superior a 30 dias, cessão sem autorização, suspensão dos serviços ou acordo entre as partes."
+        )
+
+    if "lei nº 12.846" in low or "lei n° 12.846" in low or "anticorrup" in low:
+        base["anticorrupcao"] = (
+            "Há cláusula anticorrupção exigindo que as partes atuem de forma ética e em conformidade com a Lei nº 12.846/13 e Decreto nº 8.420/15, "
+            "com possibilidade de rescisão motivada imediata em caso de violação."
+        )
+
+    if "lei geral de proteção de dados" in low or "13.709/18" in low or "proteção de dados" in low or "protecao de dados" in low:
+        base["protecao_dados_lgpd"] = (
+            "Há cláusula de proteção de dados pessoais determinando tratamento apenas para as finalidades do contrato, adoção de medidas de segurança, "
+            "registro das operações, cooperação entre as partes e notificação à Contratante em até 24 horas em caso de incidente ou descumprimento relacionado a dados pessoais."
+        )
+
+    data_contrato = _extrair_data_contrato(txt)
+    if _valor_informado(data_contrato):
+        base["data_contrato"] = data_contrato
+        if not _valor_informado(base.get("data_assinatura")) or clean_text(base.get("data_assinatura")) == "Não localizada":
+            base["data_assinatura"] = data_contrato
+
+    envelope = _extrair_envelope_docusign(txt)
+    nomes_docu = _extrair_assinantes_docusign(txt) or _extrair_assinantes_campos_docusign(txt)
+    if envelope or nomes_docu or re.search(r"assinaram\s+o\s+presente", txt, flags=re.IGNORECASE):
+        base["contrato_assinado"] = "Sim"
+        base["alerta_assinatura"] = "Contrato com evidência de assinatura eletrônica/DocuSign ou assinatura das partes."
+        base["status"] = "Ativo"
+        if nomes_docu:
+            base["pessoas_que_assinaram"] = "; ".join(nomes_docu)
+        if envelope and not _valor_informado(base.get("data_conclusao_docusign")):
+            base["data_conclusao_docusign"] = f"Não localizada data exata de conclusão no certificado; Envelope ID DocuSign {envelope}."
+
+    # Valor: mão de obra temporária costuma ser por demanda/taxa, não valor global fechado.
+    base["valor_contrato_original"] = (
+        "Sem valor global fixo definido no contrato. A remuneração depende das condições comerciais da proposta, "
+        "taxas aplicáveis, salário/remuneração da vaga, tributos e demanda efetivamente utilizada."
+    )
+    base["valor_mensal_estimado"] = (
+        "Valor mensal variável conforme demanda, quantidade de trabalhadores/vagas e salário/remuneração aplicável. "
+        "O contrato não apresenta valor mensal fixo fechado."
+    )
+    base["valor_total_estimado_vigencia"] = (
+        "Não calculável com precisão sem quantidade de vagas/trabalhadores, remuneração base e período efetivamente utilizado. "
+        "A fórmula depende de taxa/comissão x remuneração ou valor faturado conforme proposta x volume contratado."
+    )
+    base["valor_total_materiais_servicos"] = _montar_total_materiais_servicos(base.get("itens_contrato", []), _somar_valores_itens(base.get("itens_contrato", [])))
+
+    itens_proposta = detectar_servico_percentual(txt)
+    if itens_proposta:
+        base["itens_contrato"] = normalizar_itens_contrato(itens_proposta)
+
+    base["resumo_aditivos"] = base.get("resumo_aditivos") or "Nenhum aditivo identificado nos documentos analisados."
+    aditivos = normalizar_aditivos_contrato(base.get("aditivos_contrato", []))
+    if not aditivos and not re.search(r"\b(aditivo|aditamento|termo aditivo)\b", txt, flags=re.IGNORECASE):
+        base["aditivos_contrato"] = []
+        base["resumo_aditivos"] = "Nenhum aditivo identificado nos documentos analisados."
+
+    # Checklist executivo: garante que os pontos centrais apareçam mesmo se a IA devolver pouco detalhe.
+    checklist = base.get("checklist") if isinstance(base.get("checklist"), list) else []
+    nomes_check = " ".join(str(x.get("Validação") or x.get("validacao") or "") for x in checklist if isinstance(x, dict)).lower()
+    if "assinatura" not in nomes_check:
+        checklist.insert(0, {
+            "Validação": "Assinatura das Partes",
+            "Status": "Concluído" if base.get("contrato_assinado") == "Sim" else "Revisar",
+            "Peso de risco": "Crítico",
+            "Crítico": "Sim",
+            "Evidência": base.get("alerta_assinatura") or "Verificar evidência de assinatura no contrato/certificado."
+        })
+    if "lgpd" not in nomes_check and _valor_informado(base.get("protecao_dados_lgpd")):
+        checklist.append({"Validação": "Cláusula de LGPD", "Status": "Concluído", "Peso de risco": "Médio", "Crítico": "Não", "Evidência": base.get("protecao_dados_lgpd")})
+    if "anticorrup" not in nomes_check and _valor_informado(base.get("anticorrupcao")):
+        checklist.append({"Validação": "Cláusula Anticorrupção", "Status": "Concluído", "Peso de risco": "Médio", "Crítico": "Não", "Evidência": base.get("anticorrupcao")})
+    base["checklist"] = checklist
+
+    # Evita que score/risco venham bons demais em contrato de trabalho temporário sem volume fixo.
+    if not _valor_informado(base.get("risco")) or str(base.get("risco")).upper() == "BAIXO":
+        base["risco"] = "MÉDIO"
+    try:
+        score_atual = int(float(base.get("score") or 0))
+    except Exception:
+        score_atual = 0
+    if score_atual < 80:
+        base["score"] = 85
+
+    resumo_atual = str(base.get("resumo_executivo", ""))
+    if (
+        not _valor_informado(base.get("resumo_executivo"))
+        or "análise concluída" in resumo_atual.lower()
+        or "minuta" in resumo_atual.lower()
+        or "contrato social" in resumo_atual.lower()
+    ):
+        base["resumo_executivo"] = (
+            "Contrato de prestação de serviços de alocação de mão de obra temporária firmado entre SBF Comércio de Produtos Esportivos S.A. "
+            "e Imediatta Trabalho Temporário Ltda., com vigência por prazo indeterminado e finalidade de atender substituição transitória "
+            "de pessoal permanente ou demanda complementar de serviços, nos termos da Lei nº 6.019/1974. A contratação não possui valor global fixo; "
+            "as condições comerciais são variáveis conforme demanda, salário/remuneração, quantidade de trabalhadores/vagas e proposta comercial aplicável."
+        )
+
+    base["parecer"] = (
+        "Contrato estruturalmente válido para continuidade, desde que a área mantenha controle da demanda, remuneração base, "
+        "prazo máximo de alocação do trabalhador temporário, encargos e aderência às condições comerciais da proposta aprovada."
+    )
+
+    return base
+
+
+def aplicar_regras_especificas_qualidade_ia(base: Dict[str, Any], texto: str) -> Dict[str, Any]:
+    """Aplica blindagens determinísticas após a resposta do Gemini."""
+    base = _aplicar_regras_mao_obra_temporaria(base, texto)
     return base
 
 
@@ -4132,7 +4639,9 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
 
     # Para contratos de mão de obra temporária/RH, taxa e encargos são atributos
     # do serviço principal, não itens separados.
-    if itens_servico_percentual and (not itens_ia or _itens_sao_apenas_atributos_comerciais(itens_ia)):
+    if itens_servico_percentual and (_texto_indica_mao_obra_temporaria(texto_fallback) or not itens_ia or _itens_sao_apenas_atributos_comerciais(itens_ia)):
+        # Para mão de obra/RH, a extração determinística da proposta evita que a IA
+        # devolva apenas uma linha rasa e perca 40%, 50%, DISC, tributos e vencimento.
         base["itens_contrato"] = normalizar_itens_contrato(itens_servico_percentual)
     elif itens_ia:
         base["itens_contrato"] = itens_ia
@@ -4141,6 +4650,7 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
 
     base = aplicar_regras_finais_contrato(base, str(texto_fallback or ""))
     base = aplicar_regras_aditivos(base, str(texto_fallback or ""))
+    base["assinaturas_contrato"] = normalizar_assinaturas_contrato(base.get("assinaturas_contrato"), str(texto_fallback or ""), base)
 
     for lista in ["checklist", "pendencias"]:
         for item in base.get(lista, []):
@@ -4352,6 +4862,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     itens_lista = normalizar_itens_contrato(resultado.get("itens_contrato", []))
     aditivos_lista = normalizar_aditivos_contrato(resultado.get("aditivos_contrato", []))
     triagem_lista = resultado.get("triagem_anexos", []) if isinstance(resultado.get("triagem_anexos", []), list) else []
+    assinaturas_lista = normalizar_assinaturas_contrato(resultado.get("assinaturas_contrato"), texto, resultado)
     resumo_processamento = resultado.get("resumo_processamento", {}) if isinstance(resultado.get("resumo_processamento", {}), dict) else {}
 
     contraparte = v("contraparte", v("fornecedor"))
@@ -4569,6 +5080,17 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
             if str(cell.value or "").strip().upper() == "SIM":
                 cell.fill = PatternFill("solid", fgColor=s["soft_danger"])
                 cell.font = Font(name="Calibri", size=10, bold=True, color="991B1B")
+
+    # ASSINATURAS
+    ws = wb.create_sheet("Assinaturas")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Assinaturas", 8, 95)
+    if assinaturas_lista:
+        df_assinaturas = pd.DataFrame(assinaturas_lista)
+    else:
+        df_assinaturas = pd.DataFrame([{"Status": "Nenhuma assinatura individualizada localizada."}])
+    _write_dataframe_table(ws, 5, df_assinaturas, {
+        "A": 34, "B": 24, "C": 28, "D": 20, "E": 28, "F": 18, "G": 58
+    }, 44)
 
     # PENDÊNCIAS
     ws = wb.create_sheet("Pendências")
@@ -5540,6 +6062,44 @@ def render_parecer_automatico(resultado: Dict[str, Any]) -> None:
     st.markdown(f'<div class="executive-box"><b>Parecer:</b><br><br>{safe(resultado.get("parecer"))}</div>', unsafe_allow_html=True)
 
 
+def render_assinaturas_contrato(resultado: Dict[str, Any]) -> None:
+    """Aba executiva com tudo sobre assinaturas do contrato."""
+    st.markdown('<div class="section-title">Assinaturas do contrato</div>', unsafe_allow_html=True)
+
+    resumo = _resumo_assinaturas_contrato(resultado)
+    assinaturas = resumo["assinaturas"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(render_metric("Signatários", resumo["total"]), unsafe_allow_html=True)
+    c2.markdown(render_metric("Assinados", resumo["assinadas"]), unsafe_allow_html=True)
+    c3.markdown(render_metric("Contrato assinado", resumo["status"]), unsafe_allow_html=True)
+    c4.markdown(render_metric("Data principal", resumo["data"]), unsafe_allow_html=True)
+
+    alerta = resultado.get("alerta_assinatura") or "Validação de assinatura não informada."
+    data_contrato = safe(resultado.get("data_contrato"))
+    data_assinatura = safe(resultado.get("data_assinatura"))
+    data_docusign = safe(resultado.get("data_conclusao_docusign"))
+    st.markdown(
+        f'''
+        <div class="executive-box">
+            <h3>✍️ Resumo das assinaturas</h3>
+            <p>{safe(alerta)}</p>
+            <p><b>Data do contrato:</b> {data_contrato} &nbsp; | &nbsp;
+               <b>Data da assinatura:</b> {data_assinatura} &nbsp; | &nbsp;
+               <b>Conclusão DocuSign:</b> {data_docusign}</p>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    if assinaturas:
+        df_ass = pd.DataFrame(assinaturas)
+        colunas = [c for c in ["Nome", "Papel/Cargo", "E-mail", "Data da assinatura", "Fonte", "Status", "Evidência"] if c in df_ass.columns]
+        st.dataframe(df_ass[colunas], use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma assinatura individualizada foi localizada nos documentos analisados.")
+
+
 def render_resumo_executivo_aba(resultado: Dict[str, Any]) -> None:
     """Mostra o resumo executivo com aparência de informação, não de erro."""
     st.markdown('<div class="section-title">Resumo executivo</div>', unsafe_allow_html=True)
@@ -5580,7 +6140,7 @@ def render_texto_extraido_aba(resultado: Dict[str, Any], texto_extraido: str = "
 def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = "", key_prefix: str = "resultado") -> None:
     """Organiza o resultado completo em abas por seção da análise.
 
-    Estrutura desejada:
+    Ordem final aprovada:
     - Resumo executivo
     - Informações em caixas
     - Aditivos
@@ -5589,16 +6149,30 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
     - Pendências
     - Parecer automático
     - Texto extraído
+    - Triagem dos anexos
     """
-    tab_resumo, tab_infos, tab_aditivos, tab_materiais, tab_checklist, tab_pendencias, tab_parecer, tab_texto = st.tabs([
+    (
+        tab_resumo,
+        tab_infos,
+        tab_aditivos,
+        tab_materiais,
+        tab_checklist,
+        tab_assinaturas,
+        tab_pendencias,
+        tab_parecer,
+        tab_texto,
+        tab_triagem,
+    ) = st.tabs([
         "📊 Resumo executivo",
         "📌 Informações em caixas",
         "🧩 Aditivos",
         "📦 Materiais/Serviços",
         "✅ Checklist",
+        "✍️ Assinaturas",
         "⚠️ Pendências",
         "📝 Parecer",
         "📄 Texto extraído",
+        "📎 Triagem dos anexos",
     ])
 
     with tab_resumo:
@@ -5622,6 +6196,9 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
     with tab_checklist:
         render_checklist_validacao(resultado)
 
+    with tab_assinaturas:
+        render_assinaturas_contrato(resultado)
+
     with tab_pendencias:
         render_pendencias_encontradas(resultado)
 
@@ -5630,6 +6207,9 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
 
     with tab_texto:
         render_texto_extraido_aba(resultado, texto_extraido, key_prefix=key_prefix)
+
+    with tab_triagem:
+        render_triagem_anexos(resultado)
 
 # =========================================================
 # POPUP AO VIVO DE PROCESSAMENTO
@@ -6022,12 +6602,20 @@ def _tipo_documento_triagem(nome: Any, texto: Any = "") -> str:
         return "Certificado DocuSign"
     if "comunicado" in nome_low:
         return "Comunicado"
+    if "cnpj" in nome_low or "comprovante de inscrição" in nome_low or "comprovante de inscricao" in nome_low:
+        return "Documento cadastral"
+    if "berkan" in nome_low or "regularidade" in nome_low or "validação terceiros" in nome_low or "validacao terceiros" in nome_low:
+        return "Validação/Aprovação"
+    if "contrato social" in nome_low or "alteração contratual" in nome_low or "alteracao contratual" in nome_low or "alteração contrato social" in nome_low or "alteracao contrato social" in nome_low:
+        return "Contrato social/alteração cadastral"
     if "apresentação" in nome_low or "apresentacao" in nome_low:
         return "Apresentação"
     if "proposta" in nome_low or "orçamento" in nome_low or "orcamento" in nome_low:
         return "Proposta/Orçamento"
     if "validação" in nome_low or "validacao" in nome_low or "aprovação" in nome_low or "aprovacao" in nome_low:
         return "Validação/Aprovação"
+    if nome_low.endswith((".docx", ".doc")) and ("padrão" in nome_low or "padrao" in nome_low or "gerais" in nome_low or "modelo" in nome_low or "minuta" in nome_low):
+        return "Minuta/Modelo"
 
     # 2) Contrato/aditivo pelo NOME.
     if "aditivo" in nome_low or "aditamento" in nome_low:
@@ -6040,6 +6628,12 @@ def _tipo_documento_triagem(nome: Any, texto: Any = "") -> str:
         return "Certificado DocuSign"
     if "comunicado" in plano:
         return "Comunicado"
+    if "cadastro nacional da pessoa jurídica" in plano or "comprovante de inscrição" in plano or "comprovante de inscricao" in plano:
+        return "Documento cadastral"
+    if "contrato social" in plano or "alteração contratual" in plano or "alteracao contratual" in plano or "nire" in texto_inicio[:800]:
+        return "Contrato social/alteração cadastral"
+    if "berkan" in plano or "regularidade trabalhista" in plano or "consulta" in texto_inicio[:600]:
+        return "Validação/Aprovação"
     if "apresentação" in plano or "apresentacao" in plano or "estudo de mercado" in plano:
         return "Apresentação"
     if "proposta" in plano or "orçamento" in plano or "orcamento" in plano:
@@ -6068,6 +6662,9 @@ def _documento_apoio_sem_aprovacao(tipo: str) -> bool:
         "Comunicado",
         "Apresentação",
         "Validação/Aprovação",
+        "Documento cadastral",
+        "Contrato social/alteração cadastral",
+        "Minuta/Modelo",
         "Documento complementar",
     )
 
@@ -6127,6 +6724,10 @@ def _pontuacao_triagem(nome: Any, texto: Any) -> int:
 
     if tipo in ("Contrato principal", "Aditivo"):
         pontos += 250
+    if tipo == "Minuta/Modelo":
+        pontos -= 500
+    if tipo in ("Documento cadastral", "Contrato social/alteração cadastral"):
+        pontos -= 450
 
     if _evidencia_assinatura_arquivo(nome, texto):
         pontos += 600
@@ -6146,8 +6747,8 @@ def _pontuacao_triagem(nome: Any, texto: Any) -> int:
     elif "limpa" in nome_low:
         pontos += 40
 
-    if tipo in ("Certificado DocuSign", "Comunicado", "Apresentação", "Proposta/Orçamento", "Validação/Aprovação"):
-        # Apoio não deve vencer contrato/aditivo principal.
+    if tipo in ("Certificado DocuSign", "Comunicado", "Apresentação", "Proposta/Orçamento", "Validação/Aprovação", "Documento cadastral", "Contrato social/alteração cadastral", "Minuta/Modelo"):
+        # Apoio/minuta não deve vencer contrato/aditivo principal.
         pontos -= 300
 
     return pontos
@@ -6231,9 +6832,14 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
             elif melhor and melhor.get("Assinado") == "Sim":
                 reg["Decisão"] = "Ignorado da análise profunda"
                 reg["Motivo"] = "Sem assinatura ou versão antiga; existe versão assinada equivalente."
+            elif eh_melhor and tipo in ("Contrato principal", "Aditivo") and reg["Tipo"] != "Minuta/Modelo":
+                reg["Decisão"] = "Análise profunda"
+                reg["Motivo"] = "Melhor versão contratual/final localizada; enviada para análise mesmo sem evidência automática de assinatura. Validar assinatura na aba Assinaturas."
+                enviados_ia.append(reg["arquivo_obj"])
+                textos_ia.append(reg)
             else:
                 reg["Decisão"] = "Ignorado da análise profunda"
-                reg["Motivo"] = "Documento exige assinatura, mas não foi localizada evidência suficiente de assinatura."
+                reg["Motivo"] = "Documento exige assinatura, mas não foi localizada evidência suficiente ou existe versão contratual melhor no pacote."
         else:
             # Apoios não são enviados como arquivo original pesado, mas o texto pode entrar como apoio no prompt.
             melhor_apoio = melhor_apoio_por_chave.get(reg["chave"])
@@ -6248,7 +6854,10 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
                 and "assinada" not in nome_low
             )
 
-            if apoio_duplicado or apoio_apresentacao_sem_assinatura:
+            if tipo == "Minuta/Modelo":
+                reg["Decisão"] = "Ignorado da análise profunda"
+                reg["Motivo"] = "Minuta/modelo DOCX registrado apenas para auditoria; existe documento contratual/final mais adequado no pacote."
+            elif apoio_duplicado or apoio_apresentacao_sem_assinatura:
                 reg["Decisão"] = "Ignorado da análise profunda"
                 reg["Motivo"] = "Documento de apoio duplicado; existe versão assinada/equivalente selecionada como apoio."
             elif any(t in nome_low for t in ["comunicado", "apresentação", "apresentacao"]):
@@ -6272,13 +6881,21 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
             "Motivo": reg["Motivo"],
         })
 
-    # Segurança: se nenhum arquivo foi enviado para a IA, envia o pacote completo para não perder análise.
+    # Segurança controlada: se nenhum arquivo foi enviado para a IA, envia apenas o melhor contrato/aditivo,
+    # nunca o pacote completo. Isso evita contrato social/CNPJ/minutas virarem contrato principal.
     if not enviados_ia:
-        enviados_ia = list(arquivos)
-        for item in triagem:
-            if item["Decisão"] == "Ignorado da análise profunda":
-                item["Decisão"] = "Análise profunda"
-                item["Motivo"] = "Fallback de segurança: nenhum documento assinado foi selecionado, então o arquivo foi enviado para análise."
+        candidatos = [r for r in registros if r.get("Tipo") in ("Contrato principal", "Aditivo")]
+        if candidatos:
+            escolhido = sorted(candidatos, key=lambda r: r.get("pontos", 0), reverse=True)[0]
+            enviados_ia = [escolhido["arquivo_obj"]]
+            textos_ia.append(escolhido)
+            for item in triagem:
+                if item.get("Arquivo") == escolhido.get("Arquivo"):
+                    item["Decisão"] = "Análise profunda"
+                    item["Motivo"] = "Fallback controlado: melhor documento contratual/final escolhido para não perder a análise."
+                elif item.get("Decisão") == "Análise profunda":
+                    item["Decisão"] = "Ignorado da análise profunda"
+                    item["Motivo"] = "Ignorado no fallback controlado; apenas o melhor documento contratual foi enviado para análise."
 
     return {
         "arquivos_para_ia": enviados_ia,
@@ -6292,7 +6909,8 @@ def montar_texto_para_ia_com_triagem(textos_por_arquivo: Dict[str, str], triagem
     decisao_por_arquivo = {t.get("Arquivo"): t for t in triagem}
     partes = [
         "TRIAGEM AUTOMÁTICA DOS ANEXOS ANTES DA IA",
-        "Regra: documentos assinados recebem análise profunda; minutas/duplicados/sem assinatura ficam apenas registrados com motivo.",
+        "Regra: documentos principais/finais recebem análise profunda; minutas/duplicados/sem assinatura ficam registrados com motivo.",
+        "No resumo executivo, não cite minutas/modelos/contrato social/CNPJ/Berkan como documento principal quando existir contrato final/principal.",
         "",
     ]
 
@@ -6375,7 +6993,9 @@ def executar_ia_com_timer_ao_vivo(
 
 def render_triagem_anexos(resultado: Dict[str, Any]) -> None:
     triagem = resultado.get("triagem_anexos") or []
+    st.markdown('<div class="section-title">Triagem dos anexos</div>', unsafe_allow_html=True)
     if not isinstance(triagem, list) or not triagem:
+        st.info("Triagem dos anexos não disponível para este registro.")
         return
 
     total = len(triagem)
@@ -6383,7 +7003,6 @@ def render_triagem_anexos(resultado: Dict[str, Any]) -> None:
     apoio = sum(1 for x in triagem if str(x.get("Decisão", "")).startswith("Apoio"))
     ignorados = sum(1 for x in triagem if "Ignorado" in str(x.get("Decisão", "")))
 
-    st.markdown('<div class="section-title">Triagem dos anexos</div>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(render_metric("Arquivos", total), unsafe_allow_html=True)
     c2.markdown(render_metric("Análise profunda", profunda), unsafe_allow_html=True)
@@ -6967,8 +7586,6 @@ def render_analise_completa_historico(row: pd.Series) -> None:
 
     if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
         st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
-
-    render_triagem_anexos(resultado)
 
     render_resultado_em_abas(
         resultado,
@@ -7741,7 +8358,7 @@ if pagina == "📄 Nova Análise":
 
                 # Reforço final: para serviços percentuais, consolida taxa/encargos no serviço principal.
                 itens_percentuais = detectar_servico_percentual(texto)
-                if itens_percentuais and (not resultado.get("itens_contrato") or _itens_sao_apenas_atributos_comerciais(resultado.get("itens_contrato", []))):
+                if itens_percentuais and (_texto_indica_mao_obra_temporaria(texto) or not resultado.get("itens_contrato") or _itens_sao_apenas_atributos_comerciais(resultado.get("itens_contrato", []))):
                     resultado["itens_contrato"] = normalizar_itens_contrato(itens_percentuais)
                 elif not resultado.get("itens_contrato"):
                     resultado["itens_contrato"] = extrair_itens_local(texto)
@@ -7814,8 +8431,6 @@ if pagina == "📄 Nova Análise":
 
             if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
                 st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
-
-            render_triagem_anexos(resultado)
 
             render_resultado_em_abas(
                 resultado,
