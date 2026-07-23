@@ -6,7 +6,7 @@ A função `_subir_arquivos_originais_gemini` em `app.py` falhava ao tentar envi
 
 ```
 HttpError 400 when requesting
-https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta&key=AQ.Ab8RN6...
+https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta&key=CHAVE_REMOVIDA
 returned "API key not valid. Please pass a valid API key."
 ```
 
@@ -23,7 +23,7 @@ Duas libs do Google coexistiam no ambiente:
 | `google-generativeai` (legada) | 0.8.5 | 0.8.6 |
 | `google-genai` (nova) | 1.50.1 | **2.8.0** |
 
-O `app.py` usava `google.generativeai` (legada) e chamava `genai.upload_file()`. Essa função depende do **Google Discovery Service** (`$discovery/rest`) para localizar o endpoint de upload. O Discovery Service rejeita chaves no formato `AQ.Ab8RN6...` (geradas via Vertex AI / OAuth), aceitando apenas chaves no formato `AIzaSy...` do Google AI Studio.
+O `app.py` usava `google.generativeai` (legada) e chamava `genai.upload_file()`. Essa função depende do **Google Discovery Service** (`$discovery/rest`) para localizar o endpoint de upload. O Discovery Service rejeita chaves no formato `AQ...` (geradas via Vertex AI / OAuth), aceitando apenas chaves no formato `AIzaSy...` do Google AI Studio.
 
 Já `genai.list_models()` funcionava porque usava internamente um caminho que não passa pelo Discovery Service.
 
@@ -91,7 +91,7 @@ Saída de diagnóstico esperada:
 === DIAGNÓSTICO ===
   google-generativeai version : 0.8.6
   google-genai version        : 2.8.0
-  Formato da chave            : OK (AIzaSy...)   ← ou INCOMUM se for AQ.Ab8RN6...
+  Formato da chave            : OK (AIzaSy...)   ← ou INCOMUM se for AQ...
   Testando list_models()...   OK (55 modelos)
 ===================
 ```

@@ -905,6 +905,126 @@ def ler_docx(file) -> str:
     return "\n".join(partes)
 
 
+def texto_indica_falha_leitura(texto: Any) -> bool:
+    """Detecta quando o texto extraído não representa o documento real.
+
+    Isso evita que PDF escaneado/corrompido vire "apoio simples" ou gere cards
+    com "Não identificado" como se fosse uma análise válida.
+    """
+    txt = clean_text(texto).lower()
+    if not txt:
+        return True
+
+    sinais_erro = [
+        "não foi possível extrair texto do pdf",
+        "nao foi possivel extrair texto do pdf",
+        "unable to get page count",
+        "is poppler installed",
+        "poppler",
+        "erro ao ler arquivo",
+        "erro na extração de texto",
+        "erro na extracao de texto",
+        "arquivo ilegível",
+        "arquivo ilegivel",
+        "corrompido",
+        "cannot read",
+        "invalid pdf",
+    ]
+    if any(s in txt for s in sinais_erro):
+        return True
+
+    # Se sobrou só cabeçalho técnico da triagem sem conteúdo contratual, é ruim.
+    txt_sem_cabecalho = re.sub(r"(arquivo|decisão da triagem|decisao da triagem|motivo|tipo|assinado|apoio simples|análise profunda|analise profunda|documentos enviados como base da análise|documentos enviados como base da analise|triagem automática dos anexos antes da ia)", " ", txt)
+    txt_sem_cabecalho = re.sub(r"[^a-zà-ÿ0-9]+", " ", txt_sem_cabecalho).strip()
+    return len(txt_sem_cabecalho) < 120
+
+
+def texto_tem_conteudo_contratual(texto: Any) -> bool:
+    txt = clean_text(texto).lower()
+    gatilhos = [
+        "contrato de", "instrumento particular", "cláusula", "clausula",
+        "objeto", "vigência", "vigencia", "remuneração", "remuneracao",
+        "preço", "preco", "valor", "assinatura", "assinam", "contratada",
+        "contratante", "anexo i", "anexo ii", "prestação de serviços",
+        "prestacao de servicos", "fornecimento"
+    ]
+    return sum(1 for g in gatilhos if g in txt) >= 3
+
+
+def nome_indica_apoio_explicito(nome: Any) -> bool:
+    n = _nome_low(nome) if '_nome_low' in globals() else clean_text(nome).lower()
+    apoios = [
+        "certificado", "certificate", "comunicado", "apresentacao", "apresentação",
+        "proposta", "orcamento", "orçamento", "validacao", "validação",
+        "aprovacao", "aprovação", "berkan", "cartao cnpj", "cartão cnpj",
+        "cnpj", "contrato social", "alteracao contratual", "alteração contratual",
+    ]
+    return any(a in n for a in apoios)
+
+
+def arquivo_documental_analisavel(nome: Any) -> bool:
+    n = clean_text(nome).lower()
+    return n.endswith((".pdf", ".docx", ".doc"))
+
+
+def resultado_falha_tecnica_leitura(nome_arquivo: str, detalhe: Any = "") -> Dict[str, Any]:
+    """Resultado seguro quando não existe conteúdo confiável para análise.
+
+    Melhor uma falha técnica clara do que preencher cards errados.
+    """
+    detalhe_txt = clean_text(detalhe) or "Falha técnica de leitura do documento original."
+    base = local_extract("")
+    for _, chave in CAMPOS_OFICIAIS:
+        base[chave] = "Não analisado com segurança"
+
+    base.update({
+        "tipo_contrato": "Não analisado com segurança",
+        "empresa_grupo_sbf": "Não analisado com segurança",
+        "cnpj_empresa_grupo": "Não analisado com segurança",
+        "contraparte": "Não analisado com segurança",
+        "fornecedor": "Não analisado com segurança",
+        "cnpj_contraparte": "Não analisado com segurança",
+        "cnpj": "Não analisado com segurança",
+        "objeto": "Não analisado com segurança",
+        "valor_total": "Não analisado com segurança",
+        "vigencia": "Não analisado com segurança",
+        "contrato_assinado": "Não validado",
+        "alerta_assinatura": "Não foi possível validar assinatura porque o documento não foi lido com segurança.",
+        "status": "Falha técnica de leitura",
+        "risco": "ALTO",
+        "score": 0,
+        "resumo_executivo": (
+            f"Não foi possível concluir a análise do arquivo {nome_arquivo} com segurança. "
+            f"O sistema não conseguiu ler o conteúdo contratual do documento. Detalhe: {detalhe_txt}"
+        ),
+        "parecer": (
+            "Não seguir com RC/PO com base nesta execução. Reenviar o arquivo em PDF pesquisável/DOCX "
+            "ou garantir que a análise via Gemini Files API esteja ativa para leitura do documento original."
+        ),
+        "aditivos_contrato": [],
+        "itens_contrato": [],
+        "assinaturas_contrato": [],
+        "checklist": [
+            {
+                "Validação": "Leitura do arquivo principal",
+                "Status": "Incompleto",
+                "Peso de risco": "Alto",
+                "Crítico": "Sim",
+                "Evidência": detalhe_txt,
+            }
+        ],
+        "pendencias": [
+            {
+                "Pendência": "Arquivo ilegível ou não analisado com segurança",
+                "Crítico": "Sim",
+                "Risco": "Alto",
+                "Recomendação": "Reenviar o documento em PDF pesquisável/DOCX ou corrigir a integração Gemini Files API antes de seguir.",
+            }
+        ],
+    })
+    return base
+
+
 # =========================================================
 # EXTRAÇÃO DE ITENS / MATERIAIS / SERVIÇOS
 # =========================================================
@@ -3036,6 +3156,11 @@ Antes de preencher o JSON, faça mentalmente esta validação:
 10. Se houver contrato final em PDF e minutas/modelos DOCX, as minutas/modelos devem ser ignorados da análise profunda e usados apenas se não existir documento final.
 11. Para vigência por prazo indeterminado, sempre preencha periodo_vigencia_formatado no padrão: "Início DD/MM/AAAA até 31/12/9999".
 12. Para valores/taxas percentuais, não calcule valor total. Percentual, tributo, taxa e valor unitário sem quantidade definida devem ser classificados como condição comercial identificada, e não como valor global.
+13. Se o texto extraído disser “Não foi possível extrair texto”, “Unable to get page count”, “Poppler” ou erro semelhante, IGNORE essa mensagem como conteúdo contratual. Se o arquivo original estiver anexado, analise visualmente o PDF original pela Files API.
+14. Nome genérico de arquivo, como “SBF.pdf”, “contrato.pdf” ou “documento.pdf”, não significa apoio. Classifique pelo conteúdo real do arquivo.
+15. Cards/dados extraídos só podem ser preenchidos quando houver evidência no contrato principal/anexo válido. Não use contrato social, CNPJ, Berkan, certificado ou comunicado para inventar objeto, vigência, valor ou partes do contrato operacional.
+16. Se não houver evidência suficiente para um campo, use “Não identificado com segurança”. Nunca substitua por chute ou texto genérico.
+17. Na análise completa, use o mesmo JSON final consolidado dos cards, aditivos, materiais, checklist, pendências, parecer e assinaturas. Não deixe campos vazios quando a informação constar no contrato principal ou proposta válida.
 
 CONTRATOS DE MÃO DE OBRA TEMPORÁRIA / RH / RECRUTAMENTO
 Quando o pacote contiver Lei 6.019/1974, mão de obra temporária, Atração & Retenção, recrutamento, seleção ou proposta de RH:
@@ -3316,6 +3441,10 @@ COMO ANALISAR
 7. Use o texto extraído apenas como apoio para localização de trechos.
 8. Faça uma análise contextual, como se estivesse revisando o pacote documental completo.
 9. Mesmo fazendo análise contextual, retorne APENAS JSON válido para o sistema.
+10. Se o nome do arquivo for genérico (ex.: SBF.pdf), classifique pelo conteúdo visual real do arquivo, não pelo nome.
+11. Se o texto extraído abaixo contiver erro técnico de leitura, use o ARQUIVO ORIGINAL anexado como fonte principal e ignore o erro como conteúdo contratual.
+12. Para cada campo exibido em card, só preencha com informação encontrada em contrato principal/anexo válido. Caso não encontre, escreva “Não identificado com segurança”.
+13. A análise completa deve ser coerente com os cards: não deixe de listar assinaturas, valores, vigência, materiais/serviços, aditivos e pendências quando existirem no arquivo original.
 
 ARQUIVOS ORIGINAIS RECEBIDOS:
 {lista}
@@ -3548,6 +3677,17 @@ def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_origin
                 pass
 
     # 2) Fallback: versão anterior, usando texto extraído.
+    # Se o documento original existia, mas o texto extraído é só erro técnico/sem conteúdo,
+    # não podemos gerar uma análise falsa com cards vazios.
+    texto_sem_base_confiavel = texto_indica_falha_leitura(texto) and not texto_tem_conteudo_contratual(texto)
+    if arquivos_originais and texto_sem_base_confiavel:
+        raise Exception(
+            "Falha técnica: o arquivo original não pôde ser analisado pela Gemini Files API "
+            "e o texto extraído não contém conteúdo contratual confiável. "
+            "Não foi gerada análise por fallback para evitar cards incorretos. "
+            f"Detalhe Files API: {ultimo_erro_multimodal}"
+        )
+
     ultimo_erro_texto = None
     for nome in modelos:
         try:
@@ -6562,10 +6702,12 @@ def _tipo_documento_triagem(nome: Any, texto: Any = "") -> str:
     if "proposta" in plano or "orçamento" in plano or "orcamento" in plano:
         return "Proposta/Orçamento"
 
-    # 4) Contrato/aditivo pelo TÍTULO do começo do documento.
+    # 4) Contrato/aditivo pelo TÍTULO/conteúdo do começo do documento.
     if _ordinal_aditivo_numero_prioritario(nome, texto):
         return "Aditivo"
-    if re.search(r"\bcontrato\s+de\s+fornecimento\b|\bcontrato\s+de\s+prestação\b|\bcontrato\s+de\s+prestacao\b", texto_inicio, flags=re.IGNORECASE):
+    if re.search(r"\bcontrato\s+de\s+fornecimento\b|\bcontrato\s+de\s+prestação\b|\bcontrato\s+de\s+prestacao\b|instrumento\s+particular|termo\s+de\s+contrato", texto_inicio, flags=re.IGNORECASE):
+        return "Contrato principal"
+    if texto_tem_conteudo_contratual(texto_inicio):
         return "Contrato principal"
 
     if "validação" in plano or "validacao" in plano or "aprovação" in plano or "aprovacao" in plano:
@@ -6686,20 +6828,48 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
     Arquivos sem assinatura, minutas, duplicados e versões antigas entram como ignorados com motivo.
     """
     registros = []
+    total_arquivos = len(arquivos or [])
     for arquivo in arquivos:
         nome = getattr(arquivo, "name", "documento")
         texto = textos_por_arquivo.get(nome, "")
+        falha_leitura = texto_indica_falha_leitura(texto)
         tipo = _tipo_documento_triagem(nome, texto)
+
+        # Regra crítica: arquivo único genérico não pode virar apoio simples só porque
+        # a extração local falhou. Ex.: SBF.pdf escaneado precisa seguir para Files API.
+        if (
+            total_arquivos == 1
+            and arquivo_documental_analisavel(nome)
+            and tipo == "Documento complementar"
+            and not nome_indica_apoio_explicito(nome)
+        ):
+            tipo = "Contrato principal"
+
+        # Se o conteúdo tem cara de contrato, também promove para contrato principal.
+        if tipo == "Documento complementar" and texto_tem_conteudo_contratual(texto):
+            tipo = "Contrato principal"
+
         precisa_assinatura = _documento_precisa_assinatura(tipo)
         assinado = _evidencia_assinatura_arquivo(nome, texto)
-        chave = _chave_versao_documento(nome, texto)
+        if tipo == "Contrato principal":
+            chave = "contrato_principal"
+        elif tipo == "Aditivo":
+            numero_aditivo_tmp = _ordinal_aditivo_numero_prioritario(nome, texto)
+            chave = f"aditivo_{numero_aditivo_tmp}" if numero_aditivo_tmp else _chave_versao_documento(nome, texto)
+        else:
+            chave = _chave_versao_documento(nome, texto)
         pontos = _pontuacao_triagem(nome, texto)
+        if tipo in ("Contrato principal", "Aditivo"):
+            pontos += 250
+        if tipo in ("Contrato principal", "Aditivo") and falha_leitura:
+            pontos += 180
         registros.append({
             "arquivo_obj": arquivo,
             "Arquivo": nome,
             "Tipo": tipo,
-            "Assinado": "Sim" if assinado else "Não",
+            "Assinado": "Sim" if assinado else ("A validar" if falha_leitura and precisa_assinatura else "Não"),
             "Precisa assinatura": "Sim" if precisa_assinatura else "Não",
+            "Falha leitura": "Sim" if falha_leitura else "Não",
             "chave": chave,
             "pontos": pontos,
             "texto": texto,
@@ -6746,9 +6916,22 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
         nome_low = _nome_low(reg["Arquivo"])
 
         if precisa_assinatura:
+            leitura_ruim = reg.get("Falha leitura") == "Sim"
+            arquivo_unico_contrato = total_arquivos == 1 and reg.get("Tipo") in ("Contrato principal", "Aditivo")
+
             if reg["Assinado"] == "Sim" and eh_melhor:
                 reg["Decisão"] = "Análise profunda"
                 reg["Motivo"] = "Documento assinado selecionado como melhor versão para análise da IA."
+                enviados_ia.append(reg["arquivo_obj"])
+                textos_ia.append(reg)
+            elif leitura_ruim and arquivo_unico_contrato:
+                reg["Decisão"] = "Análise profunda"
+                reg["Motivo"] = "Arquivo único com leitura local insuficiente; enviado como documento original para Gemini Files API validar conteúdo e assinatura."
+                enviados_ia.append(reg["arquivo_obj"])
+                textos_ia.append(reg)
+            elif arquivo_unico_contrato and eh_melhor:
+                reg["Decisão"] = "Análise profunda"
+                reg["Motivo"] = "Arquivo único com perfil de contrato/aditivo; análise profunda necessária para validar assinatura, partes, valores e vigência."
                 enviados_ia.append(reg["arquivo_obj"])
                 textos_ia.append(reg)
             elif reg["Assinado"] == "Sim" and not eh_melhor:
@@ -6757,6 +6940,11 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
             elif melhor and melhor.get("Assinado") == "Sim":
                 reg["Decisão"] = "Ignorado da análise profunda"
                 reg["Motivo"] = "Sem assinatura ou versão antiga; existe versão assinada equivalente."
+            elif eh_melhor and texto_tem_conteudo_contratual(reg.get("texto")):
+                reg["Decisão"] = "Análise profunda"
+                reg["Motivo"] = "Documento com conteúdo contratual relevante; enviado para IA validar assinatura e dados antes de concluir."
+                enviados_ia.append(reg["arquivo_obj"])
+                textos_ia.append(reg)
             else:
                 reg["Decisão"] = "Ignorado da análise profunda"
                 reg["Motivo"] = "Documento exige assinatura, mas não foi localizada evidência suficiente de assinatura."
@@ -6836,6 +7024,8 @@ def montar_texto_para_ia_com_triagem(textos_por_arquivo: Dict[str, str], triagem
     partes = [
         "TRIAGEM AUTOMÁTICA DOS ANEXOS ANTES DA IA",
         "Regra: documentos assinados recebem análise profunda; minutas/duplicados/sem assinatura ficam apenas registrados com motivo.",
+        "Regra crítica: se o texto extraído de um PDF apresentar erro técnico de leitura, a IA deve ignorar esse erro como conteúdo e analisar o arquivo original anexado pela Files API.",
+        "Regra de qualidade: cards e análise completa só podem ser preenchidos com evidência do contrato principal/anexo válido; apoio cadastral não substitui contrato operacional.",
         "",
     ]
 
@@ -8200,6 +8390,13 @@ if pagina == "📄 Nova Análise":
                 arquivos_para_ia = triagem_info.get("arquivos_para_ia", arquivos)
                 texto_para_ia = montar_texto_para_ia_com_triagem(textos_por_arquivo, triagem_anexos)
 
+                nomes_para_ia = [getattr(a, "name", "documento") for a in (arquivos_para_ia or [])]
+                falha_leitura_critica = bool(nomes_para_ia) and all(
+                    texto_indica_falha_leitura(textos_por_arquivo.get(nome, ""))
+                    and not texto_tem_conteudo_contratual(textos_por_arquivo.get(nome, ""))
+                    for nome in nomes_para_ia
+                )
+
                 decisao_por_arquivo = {t.get("Arquivo"): t.get("Decisão") for t in triagem_anexos}
                 for nome_arquivo, decisao in decisao_por_arquivo.items():
                     if decisao == "Análise profunda":
@@ -8260,15 +8457,31 @@ if pagina == "📄 Nova Análise":
                         )
                         resultado = local_extract(texto_para_ia)
                 except Exception as e:
-                    atualizar_popup_processamento(
-                        popup_processamento,
-                        arquivos_status,
-                        "Análise Local",
-                        "A IA falhou. Executando análise local de contingência",
-                        inicio_processamento,
-                    )
-                    st.warning(f"A IA falhou e o sistema usou análise local. Detalhe: {e}")
-                    resultado = local_extract(texto)
+                    if 'falha_leitura_critica' in locals() and falha_leitura_critica:
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            "Falha técnica",
+                            "O documento original não foi lido com segurança. Gerando alerta sem preencher cards incorretos",
+                            inicio_processamento,
+                        )
+                        nome_falha = " | ".join(nomes_para_ia or [getattr(a, "name", "documento") for a in arquivos])
+                        st.error(
+                            "Não foi possível analisar o documento com segurança. "
+                            "O sistema não vai preencher cards com chute. "
+                            f"Detalhe: {e}"
+                        )
+                        resultado = resultado_falha_tecnica_leitura(nome_falha, e)
+                    else:
+                        atualizar_popup_processamento(
+                            popup_processamento,
+                            arquivos_status,
+                            "Análise Local",
+                            "A IA falhou. Executando análise local de contingência",
+                            inicio_processamento,
+                        )
+                        st.warning(f"A IA falhou e o sistema usou análise local. Detalhe: {e}")
+                        resultado = local_extract(texto)
 
                 atualizar_popup_processamento(
                     popup_processamento,
