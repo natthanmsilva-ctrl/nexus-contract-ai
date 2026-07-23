@@ -104,7 +104,8 @@ CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
     "aditivos_contrato",
     "contraparte", "fornecedor",
     "contrato_assinado", "alerta_assinatura", "status", "risco", "score",
-    "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato", "assinaturas_contrato"
+    "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato", "assinaturas_contrato",
+    "data_reconhecimento_firma"
 ])
 
 
@@ -3233,6 +3234,7 @@ Também retorne a chave assinaturas_contrato como lista. Cada assinatura deve co
 - papel_cargo
 - email
 - data_assinatura
+- data_reconhecimento_firma
 - fonte
 - status
 - evidencia
@@ -3242,7 +3244,8 @@ Regras para assinaturas:
 2. Liste os signatários encontrados no certificado ou no bloco de assinaturas do contrato.
 3. Não use nomes de documentos cadastrais como signatários.
 4. Se houver data de assinatura por pessoa, preencha; se não houver, use a data principal da assinatura/conclusão do contrato.
-5. Se não houver assinaturas localizadas, retorne assinaturas_contrato como lista vazia [].
+5. Reconhecimento de firma NÃO é data de assinatura. Preencha data_reconhecimento_firma separadamente quando houver cartório, selo ou reconhecimento por semelhança/autenticidade.
+6. Se não houver assinaturas localizadas, retorne assinaturas_contrato como lista vazia [].
 
 TABELA DE ADITIVOS OBRIGATÓRIA
 Também retorne a chave aditivos_contrato como lista.
@@ -4694,7 +4697,8 @@ _CAMPOS_DIRETOS_COM_EVIDENCIA = {
     "descricao_breve_cadastro", "forma_pagamento", "condicao_pagamento_dias", "multa",
     "vigencia_apos_assinatura", "rescisao_indenizacao", "anticorrupcao",
     "protecao_dados_lgpd", "data_assinatura", "data_contrato",
-    "data_conclusao_docusign", "valor_contrato_original", "valor_mensal_estimado",
+    "data_conclusao_docusign", "data_reconhecimento_firma",
+    "valor_contrato_original", "valor_mensal_estimado",
     "pessoas_que_assinaram", "contrato_assinado", "alerta_assinatura",
 }
 
@@ -4906,27 +4910,61 @@ def _aplicar_financeiro_confiavel(base: Dict[str, Any], resultado_bruto: Dict[st
             + complemento
         )
 
-    total_explicito = _somar_valores_itens(itens)
-    if total_explicito is not None:
+    # Consolidação financeira por natureza. Não mistura implantação/taxa única
+    # com mensalidade recorrente, percentual ou tarifa variável.
+    def _somar_categoria_financeira(classificacao: str) -> float | None:
+        total_categoria = 0.0
+        encontrou = False
+        for item in itens:
+            if _classificar_item_financeiro(item) != classificacao:
+                continue
+            numero = _parse_moeda_brasil(item.get("Valor total"))
+            if numero is None:
+                numero = _parse_moeda_brasil(item.get("Valor unitário"))
+            if numero is not None:
+                total_categoria += numero
+                encontrou = True
+        return total_categoria if encontrou else None
+
+    total_pontual = _somar_categoria_financeira("PONTUAL")
+    total_mensal = _somar_categoria_financeira("FIXO_MENSAL")
+
+    outros_explicitos = []
+    for item in itens:
+        classificacao = _classificar_item_financeiro(item)
+        if classificacao in ("PONTUAL", "FIXO_MENSAL", "UNITARIO_VARIAVEL", "PERCENTUAL_VARIAVEL"):
+            continue
+        numero = _parse_moeda_brasil(item.get("Valor total"))
+        if numero is not None:
+            outros_explicitos.append(numero)
+
+    if total_pontual is not None and total_mensal is not None:
         base["valor_total_materiais_servicos"] = (
-            f"{_formatar_moeda_brasil(total_explicito)}. Soma somente das linhas que possuem valor total monetário explícito. "
+            "Valores separados por natureza: "
+            f"custo pontual/implantação de {_formatar_moeda_brasil(total_pontual)}; "
+            f"custo fixo mensal de {_formatar_moeda_brasil(total_mensal)}/mês. "
+            "Esses valores não foram somados porque um é pontual e o outro é recorrente. "
+            "O valor global do contrato permanece não calculável sem prazo e quantidades definidos."
+        )
+    elif total_pontual is not None:
+        base["valor_total_materiais_servicos"] = (
+            f"{_formatar_moeda_brasil(total_pontual)} em valores pontuais confirmados. "
+            "Esse total não inclui mensalidades, percentuais ou tarifas variáveis e não representa o valor global do contrato."
+        )
+    elif total_mensal is not None:
+        base["valor_total_materiais_servicos"] = (
+            f"{_formatar_moeda_brasil(total_mensal)}/mês em custos fixos recorrentes confirmados. "
+            "Não representa o valor global do contrato."
+        )
+    elif outros_explicitos:
+        total_outros = sum(outros_explicitos)
+        base["valor_total_materiais_servicos"] = (
+            f"{_formatar_moeda_brasil(total_outros)}. Soma somente de linhas com valor total monetário explícito e mesma natureza. "
             "Mensalidades, percentuais e tarifas variáveis sem quantidade não foram somados."
         )
-    elif pontuais:
-        total_pontual = 0.0
-        achou = False
-        for item in pontuais:
-            n = _parse_moeda_brasil(item.get("Valor total") or item.get("Valor unitário"))
-            if n is not None:
-                total_pontual += n
-                achou = True
-        if achou:
-            base["valor_total_materiais_servicos"] = (
-                f"{_formatar_moeda_brasil(total_pontual)}. Total dos valores pontuais confirmados; não representa o valor global do contrato."
-            )
     else:
         base["valor_total_materiais_servicos"] = (
-            "Não calculável com segurança. Não há linhas com valor total e quantidade suficientes para soma."
+            "Não calculável com segurança. Não há linhas homogêneas com valor total e quantidade suficientes para soma."
         )
 
     meses = _extrair_meses_vigencia(str(base.get("texto_extraido") or ""), base)
@@ -5108,11 +5146,161 @@ def _filtrar_assinaturas_com_evidencia(base: Dict[str, Any]) -> Dict[str, Any]:
     return base
 
 
+
+def _datas_br_encontradas(valor: Any) -> List[str]:
+    """Retorna datas brasileiras únicas na ordem em que aparecem."""
+    datas = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", clean_text(valor))
+    saida: List[str] = []
+    for data in datas:
+        if data not in saida:
+            saida.append(data)
+    return saida
+
+
+def _data_reconhecimento_da_evidencia(valor: Any) -> str:
+    """Extrai somente data ligada a reconhecimento de firma/cartório."""
+    texto = clean_text(valor)
+    padroes = [
+        r"reconhec(?:imento|ida|ido)[^\d]{0,90}(\d{2}/\d{2}/\d{4})",
+        r"firma[^\d]{0,90}(\d{2}/\d{2}/\d{4})",
+        r"cart[oó]rio[^\d]{0,90}(\d{2}/\d{2}/\d{4})",
+    ]
+    for padrao in padroes:
+        m = re.search(padrao, texto, flags=re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _data_valida_simples(valor: Any) -> str:
+    datas = _datas_br_encontradas(valor)
+    return datas[0] if datas else ""
+
+
+def _consolidar_assinatura_final(base: Dict[str, Any]) -> Dict[str, Any]:
+    """Elimina contradições entre tabela, card, alerta e datas de assinatura."""
+    assinaturas = base.get("assinaturas_contrato") if isinstance(base.get("assinaturas_contrato"), list) else []
+    validas: List[Dict[str, Any]] = []
+    nomes: List[str] = []
+    datas_assinatura: List[str] = []
+    datas_reconhecimento: List[str] = []
+    fontes: List[str] = []
+    evidencias: List[str] = []
+
+    for item in assinaturas:
+        if not isinstance(item, dict):
+            continue
+        nome = clean_text(item.get("nome") or item.get("Nome"))
+        fonte = clean_text(item.get("fonte") or item.get("Fonte"))
+        evidencia = clean_text(item.get("evidencia") or item.get("evidência") or item.get("Evidência"))
+        if not (_valor_informado(nome) and _valor_informado(fonte) and _texto_evidencia_util(evidencia)):
+            continue
+
+        data_ass = _data_valida_simples(item.get("data_assinatura") or item.get("Data da assinatura"))
+        data_rec = _data_valida_simples(
+            item.get("data_reconhecimento_firma")
+            or item.get("Data do reconhecimento de firma")
+            or _data_reconhecimento_da_evidencia(evidencia)
+        )
+
+        # Reconhecimento de firma é evento posterior e nunca substitui a data da assinatura.
+        if data_ass and data_rec and data_ass == data_rec:
+            texto_ev = evidencia.lower()
+            if "reconhec" in texto_ev or "cartório" in texto_ev or "cartorio" in texto_ev:
+                # Mantém a data no reconhecimento; a assinatura global será buscada no contrato.
+                data_ass = ""
+
+        novo = dict(item)
+        if data_ass:
+            novo["data_assinatura"] = data_ass
+            datas_assinatura.append(data_ass)
+        if data_rec:
+            novo["data_reconhecimento_firma"] = data_rec
+            datas_reconhecimento.append(data_rec)
+        validas.append(novo)
+
+        if nome not in nomes:
+            nomes.append(nome)
+        if fonte not in fontes:
+            fontes.append(fonte)
+        if evidencia not in evidencias:
+            evidencias.append(evidencia)
+
+    base["assinaturas_contrato"] = validas
+
+    auditoria = _mapa_auditoria(base.get("auditoria_campos", []))
+    item_assinado = _encontrar_item_auditoria(auditoria, "contrato_assinado")
+    auditoria_assinatura_ok = _auditoria_confirma(item_assinado)
+    contrato_assinado = bool(validas) or clean_text(base.get("contrato_assinado")).lower() == "sim" or auditoria_assinatura_ok
+
+    if contrato_assinado:
+        base["contrato_assinado"] = "Sim"
+        if nomes:
+            base["pessoas_que_assinaram"] = "; ".join(nomes)
+
+        # Data da assinatura: usa primeiro as datas específicas dos signatários;
+        # depois a data global já confirmada. Nunca usa reconhecimento como fallback.
+        data_global = _data_valida_simples(base.get("data_assinatura"))
+        data_contrato = _data_valida_simples(base.get("data_contrato"))
+        if datas_assinatura:
+            base["data_assinatura"] = datas_assinatura[0]
+        elif data_global:
+            base["data_assinatura"] = data_global
+        elif data_contrato:
+            base["data_assinatura"] = data_contrato
+
+        if datas_reconhecimento:
+            unicas = []
+            for data in datas_reconhecimento:
+                if data not in unicas:
+                    unicas.append(data)
+            base["data_reconhecimento_firma"] = "; ".join(unicas)
+
+        data_docusign = clean_text(base.get("data_conclusao_docusign"))
+        docusign_valido = _data_valida_simples(data_docusign) and "não aplicável" not in data_docusign.lower()
+        qtd = len(nomes) if nomes else len(validas)
+        partes_alerta = []
+        if docusign_valido:
+            partes_alerta.append(f"Contrato assinado eletronicamente com conclusão DocuSign em {_data_valida_simples(data_docusign)}")
+        else:
+            partes_alerta.append("Contrato assinado fisicamente")
+        if qtd:
+            partes_alerta.append(f"{qtd} signatário(s) identificado(s)")
+        if _data_valida_simples(base.get("data_assinatura")):
+            partes_alerta.append(f"data principal de assinatura: {_data_valida_simples(base.get('data_assinatura'))}")
+        if _valor_informado(base.get("data_reconhecimento_firma")):
+            partes_alerta.append(f"reconhecimento de firma: {clean_text(base.get('data_reconhecimento_firma'))}")
+        if fontes:
+            partes_alerta.append("fonte: " + "; ".join(fontes[:3]))
+        base["alerta_assinatura"] = ". ".join(partes_alerta).rstrip(".") + "."
+    else:
+        base["contrato_assinado"] = "Não validado"
+        base["alerta_assinatura"] = "Não foi localizada evidência documental suficiente para validar a assinatura."
+
+    return base
+
+
+def _pendencia_email_signatario_sem_exigencia(pendencia: Dict[str, Any]) -> bool:
+    """Ausência de e-mail não é risco contratual sem obrigação expressa no instrumento."""
+    texto_total = " ".join(clean_text(v) for v in pendencia.values()).lower()
+    trata_email = bool(re.search(r"e-?mail", texto_total)) and bool(re.search(r"signat|assinante|representante", texto_total))
+    if not trata_email:
+        return False
+    exigencia_expressa = bool(re.search(
+        r"(contrato|cl[aá]usula|instrumento).{0,90}(exige|exigência|obrigat[oó]rio|dever[aá]|deve informar).{0,90}e-?mail",
+        texto_total,
+        flags=re.IGNORECASE,
+    ))
+    return not exigencia_expressa
+
+
 def _filtrar_pendencias_sem_evidencia(base: Dict[str, Any]) -> Dict[str, Any]:
     pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
     validas = []
     for p in pendencias:
         if not isinstance(p, dict):
+            continue
+        if _pendencia_email_signatario_sem_exigencia(p):
             continue
         evidencia = clean_text(p.get("Evidência") or p.get("evidencia") or p.get("trecho_evidencia"))
         pagina = clean_text(p.get("Página") or p.get("pagina"))
@@ -5188,6 +5376,7 @@ def _aplicar_auditoria_rigida(base: Dict[str, Any], resultado_bruto: Dict[str, A
     base = _filtrar_aditivos_com_evidencia(base, resultado_bruto)
     base = _aplicar_financeiro_confiavel(base, resultado_bruto)
     base = _filtrar_assinaturas_com_evidencia(base)
+    base = _consolidar_assinatura_final(base)
     base = _filtrar_checklist_sem_evidencia(base)
     base = _filtrar_pendencias_sem_evidencia(base)
     base = _recalcular_risco_por_evidencias(base)
@@ -5240,7 +5429,7 @@ Além das chaves já pedidas, retorne:
 3. conflitos_documentais: lista com campo, valores_conflitantes, arquivos, regra_aplicada e decisao.
 4. Cada item de itens_contrato deve também conter tipo_valor, periodicidade, arquivo_fonte, pagina e trecho_evidencia.
 5. Cada item de pendencias deve também conter Arquivo, Página e Evidência.
-6. Cada assinatura deve ter fonte e evidencia específica; não liste nome apenas porque ele aparece no corpo do documento.
+6. Cada assinatura deve ter fonte e evidencia específica; não liste nome apenas porque ele aparece no corpo do documento. Cada assinatura deve separar data_assinatura de data_reconhecimento_firma.
 7. Cada aditivo deve também conter pagina e trecho_evidencia específicos do próprio termo aditivo.
 8. Cada item do checklist deve usar Evidência específica, com cláusula/página/trecho; não use textos genéricos como “termo localizado”.
 
@@ -5286,8 +5475,9 @@ TESTES OBRIGATÓRIOS
 4. Confirme cada assinatura no bloco/certificado correspondente. Não invente testemunha ausente.
 5. Mantenha data do contrato, assinatura, DocuSign e reconhecimento de firma em campos distintos.
 6. Verifique se todas as informações existentes foram transportadas para cards, itens, assinaturas, checklist e parecer.
-7. Pendências sem evidência objetiva devem ser removidas.
-8. Atualize auditoria_campos, valores_estruturados e conflitos_documentais.
+7. Pendências sem evidência objetiva devem ser removidas. Ausência de e-mail de signatário NÃO é pendência contratual, salvo se o próprio contrato exigir expressamente esse e-mail.
+8. Nunca some implantação/taxa única com mensalidade recorrente para formar valor total do contrato. Mostre os valores separados por natureza.
+9. Atualize auditoria_campos, valores_estruturados e conflitos_documentais.
 
 JSON PRELIMINAR:
 {rascunho}
@@ -5643,6 +5833,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Período de Vigência", v("periodo_vigencia_formatado")),
         ("Pagamento", pagamento),
         ("Data da Assinatura", data_assinatura),
+        ("Data do Reconhecimento de Firma", v("data_reconhecimento_firma", "Não aplicável")),
         ("Data do Contrato", v("data_contrato")),
         ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
         ("Pessoas que assinaram", v("pessoas_que_assinaram")),
@@ -5678,6 +5869,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Vigência", vigencia),
         ("Período de Vigência", v("periodo_vigencia_formatado")),
         ("Data da Assinatura", data_assinatura),
+        ("Data do Reconhecimento de Firma", v("data_reconhecimento_firma", "Não aplicável")),
         ("Data do Contrato", v("data_contrato")),
         ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
         ("Pessoas que assinaram", v("pessoas_que_assinaram")),
@@ -5714,7 +5906,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     ws = wb.create_sheet("Assinaturas")
     _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Assinaturas", 8, 95)
     _write_dataframe_table(ws, 5, assinaturas_df_excel, {
-        "A": 34, "B": 26, "C": 28, "D": 20, "E": 24, "F": 18, "G": 70
+        "A": 30, "B": 24, "C": 26, "D": 18, "E": 24, "F": 24, "G": 18, "H": 62
     }, 46)
 
     # ITENS DO CONTRATO
@@ -6876,7 +7068,9 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
     linhas: List[Dict[str, Any]] = []
     raw = resultado.get("assinaturas_contrato")
     data_padrao = clean_text(resultado.get("data_assinatura") or resultado.get("data_conclusao_docusign") or resultado.get("data_contrato"))
-    fonte_padrao = "DocuSign / contrato" if "docusign" in clean_text(resultado.get("alerta_assinatura")).lower() or _valor_informado(resultado.get("data_conclusao_docusign")) else "Contrato"
+    data_docusign_txt = clean_text(resultado.get("data_conclusao_docusign"))
+    docusign_confirmado = bool(_data_valida_simples(data_docusign_txt)) and "não aplicável" not in data_docusign_txt.lower()
+    fonte_padrao = "DocuSign / contrato" if "docusign" in clean_text(resultado.get("alerta_assinatura")).lower() or docusign_confirmado else "Contrato"
     status_padrao = "Assinado" if clean_text(resultado.get("contrato_assinado")).lower() == "sim" else "Não localizado"
     evidencia_padrao = clean_text(resultado.get("alerta_assinatura") or "Evidência de assinatura conforme documentos analisados.")
 
@@ -6892,6 +7086,12 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
                 "Papel/Cargo": clean_text(item.get("papel_cargo") or item.get("Papel/Cargo") or item.get("cargo") or item.get("papel") or "Não localizado"),
                 "E-mail": clean_text(item.get("email") or item.get("e-mail") or item.get("Email") or "Não localizado"),
                 "Data da assinatura": clean_text(item.get("data_assinatura") or item.get("Data da assinatura") or data_padrao or "Não localizado"),
+                "Data do reconhecimento de firma": clean_text(
+                    item.get("data_reconhecimento_firma")
+                    or item.get("Data do reconhecimento de firma")
+                    or _data_reconhecimento_da_evidencia(item.get("evidencia") or item.get("evidência") or item.get("Evidência"))
+                    or "Não aplicável"
+                ),
                 "Fonte": clean_text(item.get("fonte") or item.get("Fonte") or fonte_padrao),
                 "Status": clean_text(item.get("status") or item.get("Status") or status_padrao),
                 "Evidência": clean_text(item.get("evidencia") or item.get("evidência") or item.get("Evidência") or evidencia_padrao),
@@ -6904,6 +7104,7 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
                 "Papel/Cargo": "Não localizado",
                 "E-mail": "Não localizado",
                 "Data da assinatura": data_padrao or "Não localizado",
+                "Data do reconhecimento de firma": clean_text(resultado.get("data_reconhecimento_firma") or "Não aplicável"),
                 "Fonte": fonte_padrao,
                 "Status": status_padrao,
                 "Evidência": evidencia_padrao,
@@ -6915,6 +7116,7 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
             "Papel/Cargo": "Não localizado",
             "E-mail": "Não localizado",
             "Data da assinatura": data_padrao or "Não localizado",
+            "Data do reconhecimento de firma": clean_text(resultado.get("data_reconhecimento_firma") or "Não aplicável"),
             "Fonte": fonte_padrao,
             "Status": status_padrao,
             "Evidência": evidencia_padrao if _valor_informado(evidencia_padrao) else "Nenhum signatário localizado nos documentos analisados.",
@@ -7753,6 +7955,74 @@ def classificar_anexos_para_analise(arquivos: List[Any], textos_por_arquivo: Dic
         "textos_para_ia": textos_ia,
         "triagem": triagem,
     }
+
+
+def _sincronizar_triagem_com_resultado(triagem: List[Dict[str, Any]], resultado: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Atualiza a pré-triagem com o que foi efetivamente validado na análise profunda."""
+    if not isinstance(triagem, list):
+        return []
+
+    saida = [dict(item) for item in triagem if isinstance(item, dict)]
+    assinado_final = clean_text(resultado.get("contrato_assinado")).lower() == "sim"
+    assinaturas = resultado.get("assinaturas_contrato") if isinstance(resultado.get("assinaturas_contrato"), list) else []
+
+    fontes_assinatura: List[str] = []
+    for item in assinaturas:
+        if not isinstance(item, dict):
+            continue
+        fonte = clean_text(item.get("fonte") or item.get("Fonte"))
+        if fonte and fonte not in fontes_assinatura:
+            fontes_assinatura.append(fonte)
+
+    profundos = [i for i in saida if i.get("Decisão") == "Análise profunda" and i.get("Tipo") in ("Contrato principal", "Aditivo")]
+
+    def _arquivo_mencionado(nome: str) -> bool:
+        nome_norm = _normalizar_texto_chave(nome)
+        for fonte in fontes_assinatura:
+            fonte_norm = _normalizar_texto_chave(fonte)
+            if nome_norm and fonte_norm and (nome_norm in fonte_norm or fonte_norm in nome_norm):
+                return True
+        return False
+
+    for item in saida:
+        if item.get("Decisão") != "Análise profunda" or item.get("Tipo") not in ("Contrato principal", "Aditivo"):
+            continue
+
+        nome = clean_text(item.get("Arquivo"))
+        corresponde = _arquivo_mencionado(nome) or len(profundos) == 1
+        if assinado_final and corresponde:
+            item["Assinado"] = "Sim"
+            detalhe = "Assinatura confirmada durante a análise profunda"
+            if fontes_assinatura:
+                detalhe += "; fonte: " + "; ".join(fontes_assinatura[:2])
+            data_ass = _data_valida_simples(resultado.get("data_assinatura"))
+            if data_ass:
+                detalhe += f"; data principal: {data_ass}"
+            item["Motivo"] = detalhe + "."
+        elif not assinado_final and item.get("Assinado") in ("A validar", "Não"):
+            item["Assinado"] = "Não validado"
+            item["Motivo"] = "Análise profunda concluída sem evidência documental suficiente para confirmar a assinatura."
+
+    return saida
+
+
+def _finalizar_coerencia_pos_processamento(
+    resultado: Dict[str, Any],
+    resultado_bruto: Dict[str, Any],
+    triagem: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Última trava: reaplica evidências depois das regras legadas e sincroniza a triagem."""
+    base = dict(resultado or {})
+    if isinstance(resultado_bruto, dict) and resultado_bruto.get("auditoria_campos"):
+        base = _aplicar_auditoria_rigida(base, resultado_bruto)
+    else:
+        base = _consolidar_assinatura_final(base)
+        base = _filtrar_pendencias_sem_evidencia(base)
+        base = _recalcular_risco_por_evidencias(base)
+        base = _reconstruir_resumo_e_parecer(base)
+
+    base["triagem_anexos"] = _sincronizar_triagem_com_resultado(triagem, base)
+    return base
 
 
 def montar_texto_para_ia_com_triagem(textos_por_arquivo: Dict[str, str], triagem: List[Dict[str, Any]]) -> str:
@@ -9228,8 +9498,11 @@ if pagina == "📄 Nova Análise":
                     inicio_processamento,
                 )
 
-                resultado["texto_extraido"] = texto
-                resultado = normalizar(resultado)
+                # Preserva a resposta bruta da IA para reaplicar a matriz de evidências
+                # depois das regras legadas de compatibilidade.
+                resultado_bruto_ia = dict(resultado or {})
+                resultado_bruto_ia["texto_extraido"] = texto
+                resultado = normalizar(resultado_bruto_ia)
 
                 # Reforço final: para serviços percentuais, consolida taxa/encargos no serviço principal.
                 itens_percentuais = detectar_servico_percentual(texto)
@@ -9238,6 +9511,7 @@ if pagina == "📄 Nova Análise":
                 elif not resultado.get("itens_contrato"):
                     resultado["itens_contrato"] = extrair_itens_local(texto)
 
+                # Regras legadas continuam sendo executadas para compatibilidade visual/histórico.
                 resultado = aplicar_regras_finais_contrato(resultado, texto)
                 resultado["data_analise"] = datetime.now().strftime("%d/%m/%Y %H:%M")
                 resultado["origem_contrato"] = origem_contrato
@@ -9247,7 +9521,16 @@ if pagina == "📄 Nova Análise":
                 resultado["arquivos_analisados"] = nomes_arquivos
                 resultado["tipo_origem"] = origem_contrato.replace("📘", "").replace("🛒", "").strip()
                 resultado["modelo_ia"] = resultado.get("modelo_ia", modo if modo != "Análise Local" else "Análise Local")
-                resultado["triagem_anexos"] = triagem_anexos
+
+                # Aditivos e, por último, a trava de coerência baseada em evidência.
+                resultado = aplicar_regras_aditivos(resultado, texto)
+                resultado = _finalizar_coerencia_pos_processamento(
+                    resultado,
+                    resultado_bruto_ia,
+                    triagem_anexos,
+                )
+
+                triagem_anexos = resultado.get("triagem_anexos", triagem_anexos)
                 resultado["arquivos_enviados_analise_profunda"] = " | ".join([getattr(a, "name", "documento") for a in arquivos_para_ia])
                 resultado["arquivos_ignorados_analise_profunda"] = [t for t in triagem_anexos if "Ignorado" in str(t.get("Decisão", ""))]
 
@@ -9266,9 +9549,6 @@ if pagina == "📄 Nova Análise":
                     "tempo_ia": _formatar_tempo_execucao(tempo_ia_segundos),
                     "finalizado_em": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 }
-
-                # Reprocessa aditivos depois que data_analise e arquivos_analisados já foram preenchidos
-                resultado = aplicar_regras_aditivos(resultado, texto)
 
                 salvar_analise(
                     resultado,
@@ -9304,8 +9584,8 @@ if pagina == "📄 Nova Análise":
 
             render_resumo_processamento_final(resultado)
 
-            if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
-                st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
+            if clean_text(resultado.get("contrato_assinado")).lower() != "sim":
+                st.error("⚠️ Contrato sem assinatura validada. Revisar antes da criação da RC/PO.")
 
             render_resultado_em_abas(
                 resultado,
