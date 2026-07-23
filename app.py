@@ -4679,6 +4679,731 @@ def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================================================
+# MOTOR DE CONFIANÇA V2 — EVIDÊNCIA, DUPLA VALIDAÇÃO E
+# SEPARAÇÃO SEGURA DE VALORES/DATAS/ASSINATURAS
+# =========================================================
+# Mantém as funções antigas como base de compatibilidade e aplica uma camada
+# final mais rígida. Assim, histórico, visual e exportações continuam iguais,
+# mas nenhum dado crítico é confirmado sem fonte/evidência.
+_prompt_ia_legado = prompt_ia
+_normalizar_legado = normalizar
+
+_CAMPOS_DIRETOS_COM_EVIDENCIA = {
+    "tipo_contrato", "empresa_grupo_sbf", "cnpj_empresa_grupo", "local_prestacao",
+    "contraparte", "cnpj_contraparte", "objetivo", "descricao_servico_material",
+    "descricao_breve_cadastro", "forma_pagamento", "condicao_pagamento_dias", "multa",
+    "vigencia_apos_assinatura", "rescisao_indenizacao", "anticorrupcao",
+    "protecao_dados_lgpd", "data_assinatura", "data_contrato",
+    "data_conclusao_docusign", "valor_contrato_original", "valor_mensal_estimado",
+    "pessoas_que_assinaram", "contrato_assinado", "alerta_assinatura",
+}
+
+_CAMPOS_CALCULADOS_OU_CONSOLIDADOS = {
+    "periodo_vigencia_formatado", "valor_total_estimado_vigencia",
+    "valor_total_materiais_servicos", "resumo_aditivos",
+}
+
+_STATUS_CONFIRMADOS = {
+    "CONFIRMADO", "CONFIRMADO_NO_DOCUMENTO", "LOCALIZADO", "VALIDADO",
+    "CALCULADO", "CALCULADO_PELO_SISTEMA", "NAO_APLICAVEL", "NÃO_APLICÁVEL",
+}
+
+
+def _norm_token(valor: Any) -> str:
+    txt = clean_text(valor).upper()
+    txt = (txt.replace("Á", "A").replace("À", "A").replace("Ã", "A").replace("Â", "A")
+              .replace("É", "E").replace("Ê", "E").replace("Í", "I")
+              .replace("Ó", "O").replace("Ô", "O").replace("Õ", "O")
+              .replace("Ú", "U").replace("Ç", "C"))
+    return re.sub(r"[^A-Z0-9]+", "_", txt).strip("_")
+
+
+def _texto_evidencia_util(valor: Any) -> bool:
+    txt = clean_text(valor)
+    low = txt.lower()
+    if len(txt) < 8:
+        return False
+    bloqueios = {
+        "não localizado", "nao localizado", "não identificado", "nao identificado",
+        "conforme documento", "documento analisado", "informação localizada",
+        "informacao localizada", "termo localizado", "não aplicável", "nao aplicavel",
+    }
+    return low not in bloqueios and not low.startswith("não foi localizada informação")
+
+
+def _normalizar_auditoria_campos(valor: Any) -> List[Dict[str, Any]]:
+    if isinstance(valor, dict):
+        itens = []
+        for campo, detalhe in valor.items():
+            if isinstance(detalhe, dict):
+                novo = dict(detalhe)
+                novo.setdefault("campo", campo)
+            else:
+                novo = {"campo": campo, "valor": detalhe}
+            itens.append(novo)
+        valor = itens
+    if not isinstance(valor, list):
+        return []
+
+    saida: List[Dict[str, Any]] = []
+    for item in valor:
+        if not isinstance(item, dict):
+            continue
+        campo = clean_text(item.get("campo") or item.get("chave") or item.get("field"))
+        if not campo:
+            continue
+        try:
+            confianca = int(float(str(item.get("confianca") or item.get("confiança") or 0).replace(",", ".")))
+        except Exception:
+            confianca = 0
+        saida.append({
+            "Campo": campo,
+            "Valor": clean_text(item.get("valor") or item.get("resultado") or "Não identificado com segurança"),
+            "Status": clean_text(item.get("status") or "NAO_LOCALIZADO"),
+            "Tipo de dado": clean_text(item.get("tipo_dado") or item.get("classificacao") or item.get("classificação") or "DADO_DOCUMENTAL"),
+            "Arquivo fonte": clean_text(item.get("arquivo_fonte") or item.get("arquivo") or item.get("fonte") or "Não localizado"),
+            "Página": clean_text(item.get("pagina") or item.get("página") or "Não localizado"),
+            "Trecho de evidência": clean_text(item.get("trecho_evidencia") or item.get("trecho") or item.get("evidencia") or item.get("evidência") or "Não localizado"),
+            "Confiança": max(0, min(confianca, 100)),
+        })
+    return saida
+
+
+def _mapa_auditoria(auditoria: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {_norm_token(item.get("Campo")): item for item in auditoria if item.get("Campo")}
+
+
+def _auditoria_confirma(item: Dict[str, Any] | None) -> bool:
+    if not item:
+        return False
+    status = _norm_token(item.get("Status"))
+    tipo = _norm_token(item.get("Tipo de dado"))
+    if status not in {_norm_token(s) for s in _STATUS_CONFIRMADOS}:
+        return False
+    if status in ("CALCULADO", "CALCULADO_PELO_SISTEMA") or tipo.startswith("CALCULADO"):
+        return _texto_evidencia_util(item.get("Trecho de evidência"))
+    fonte_ok = _valor_informado(item.get("Arquivo fonte"))
+    evidencia_ok = _texto_evidencia_util(item.get("Trecho de evidência"))
+    confianca = int(item.get("Confiança") or 0)
+    return bool(fonte_ok and evidencia_ok and confianca >= 70)
+
+
+def _valor_nao_confirmado(campo: str) -> str:
+    if campo == "contrato_assinado":
+        return "Não validado"
+    if campo == "alerta_assinatura":
+        return "Não foi localizada evidência documental suficiente para validar a assinatura."
+    return "Não identificado com segurança"
+
+
+def _encontrar_item_auditoria(mapa: Dict[str, Dict[str, Any]], campo: str) -> Dict[str, Any] | None:
+    candidatos = [campo, campo.replace("_", " ")]
+    for rotulo, chave in CAMPOS_OFICIAIS:
+        if chave == campo:
+            candidatos.append(rotulo)
+    for c in candidatos:
+        item = mapa.get(_norm_token(c))
+        if item:
+            return item
+    return None
+
+
+def _classificar_item_financeiro(item: Dict[str, Any]) -> str:
+    desc = clean_text(item.get("Descrição") or item.get("descricao")).lower()
+    unidade = clean_text(item.get("Unidade") or item.get("unidade")).lower()
+    texto = f"{desc} {unidade}"
+    if any(t in texto for t in ["implantação", "implantacao", "setup", "taxa única", "taxa unica", "adesão", "adesao"]):
+        return "PONTUAL"
+    if any(t in texto for t in ["custo fixo mensal", "mensalidade", "remuneração mensal", "remuneracao mensal", "fixo mensal"]):
+        return "FIXO_MENSAL"
+    if unidade in ("mês", "mes", "mensal") and not any(t in texto for t in ["acionista", "operação", "operacao", "unidade"]):
+        return "FIXO_MENSAL"
+    if any(t in texto for t in ["acionista", "operação", "operacao", "por item", "por usuário", "por usuario", "por refeição", "por refeicao", "por vaga", "por trabalhador"]):
+        return "UNITARIO_VARIAVEL"
+    if _valor_informado(item.get("Taxa / Percentual")):
+        return "PERCENTUAL_VARIAVEL"
+    return "OUTRO"
+
+
+def _primeiro_valor_item(itens: List[Dict[str, Any]], classificacao: str, preferir_total: bool = False) -> tuple[float | None, Dict[str, Any] | None]:
+    for item in itens:
+        if _classificar_item_financeiro(item) != classificacao:
+            continue
+        campos = ["Valor total", "Valor unitário"] if preferir_total else ["Valor unitário", "Valor total"]
+        for campo in campos:
+            numero = _parse_moeda_brasil(item.get(campo))
+            if numero is not None:
+                return numero, item
+    return None, None
+
+
+def _valores_estruturados_dict(valor: Any) -> Dict[str, Any]:
+    return valor if isinstance(valor, dict) else {}
+
+
+def _bloco_valor_estruturado(estruturados: Dict[str, Any], *chaves: str) -> Dict[str, Any]:
+    for chave in chaves:
+        bloco = estruturados.get(chave)
+        if isinstance(bloco, dict):
+            return bloco
+        if _valor_informado(bloco):
+            return {"valor": bloco, "status": "CONFIRMADO"}
+    return {}
+
+
+def _bloco_valor_confirmado(bloco: Dict[str, Any]) -> bool:
+    if not bloco:
+        return False
+    status = _norm_token(bloco.get("status") or "CONFIRMADO")
+    evidencia = bloco.get("trecho_evidencia") or bloco.get("evidencia")
+    fonte = bloco.get("arquivo_fonte") or bloco.get("fonte")
+    if status not in ("CONFIRMADO", "LOCALIZADO", "VALIDADO", "CALCULADO", "CALCULADO_PELO_SISTEMA"):
+        return False
+    # Blocos antigos sem metadados continuam aceitos somente quando o valor é claro;
+    # na versão nova, o prompt sempre enviará fonte e trecho.
+    return _valor_informado(bloco.get("valor")) and (bool(_valor_informado(fonte) and _texto_evidencia_util(evidencia)) or not fonte)
+
+
+def _aplicar_financeiro_confiavel(base: Dict[str, Any], resultado_bruto: Dict[str, Any]) -> Dict[str, Any]:
+    itens = normalizar_itens_contrato(base.get("itens_contrato", []))
+    estruturados = _valores_estruturados_dict(resultado_bruto.get("valores_estruturados"))
+
+    global_bloco = _bloco_valor_estruturado(estruturados, "valor_global", "valor_contrato_original")
+    mensal_bloco = _bloco_valor_estruturado(estruturados, "valor_fixo_mensal", "valor_mensal_fixo", "valor_mensal")
+
+    global_num = _parse_moeda_brasil(global_bloco.get("valor")) if _bloco_valor_confirmado(global_bloco) else None
+    mensal_num = _parse_moeda_brasil(mensal_bloco.get("valor")) if _bloco_valor_confirmado(mensal_bloco) else None
+    item_mensal = None
+    if mensal_num is None:
+        mensal_num, item_mensal = _primeiro_valor_item(itens, "FIXO_MENSAL")
+
+    tarifas = [i for i in itens if _classificar_item_financeiro(i) in ("UNITARIO_VARIAVEL", "PERCENTUAL_VARIAVEL")]
+    pontuais = [i for i in itens if _classificar_item_financeiro(i) == "PONTUAL"]
+
+    if global_num is not None:
+        base["valor_contrato_original"] = (
+            f"{_formatar_moeda_brasil(global_num)}. Valor global expressamente definido no instrumento contratual."
+        )
+    else:
+        base["valor_contrato_original"] = _texto_sem_valor_global()
+
+    if mensal_num is not None:
+        texto_mensal = f"{_formatar_moeda_brasil(mensal_num)}/mês. Valor fixo mensal identificado nos documentos."
+        if tarifas:
+            texto_mensal += f" Há ainda {len(tarifas)} tarifa(s) variável(is), cobradas separadamente conforme acionistas, operações, itens ou demanda."
+        base["valor_mensal_estimado"] = texto_mensal
+    elif tarifas:
+        exemplos = []
+        for item in tarifas[:3]:
+            valor = _parse_moeda_brasil(item.get("Valor unitário"))
+            if valor is not None:
+                exemplos.append(f"{clean_text(item.get('Descrição'))}: {_formatar_moeda_brasil(valor)}")
+            elif _valor_informado(item.get("Taxa / Percentual")):
+                exemplos.append(f"{clean_text(item.get('Descrição'))}: {clean_text(item.get('Taxa / Percentual'))}")
+        complemento = (" Exemplos: " + "; ".join(exemplos) + ".") if exemplos else ""
+        base["valor_mensal_estimado"] = (
+            "Valor mensal variável conforme utilização, quantidade, operação ou demanda; não há mensalidade fixa confirmada."
+            + complemento
+        )
+
+    total_explicito = _somar_valores_itens(itens)
+    if total_explicito is not None:
+        base["valor_total_materiais_servicos"] = (
+            f"{_formatar_moeda_brasil(total_explicito)}. Soma somente das linhas que possuem valor total monetário explícito. "
+            "Mensalidades, percentuais e tarifas variáveis sem quantidade não foram somados."
+        )
+    elif pontuais:
+        total_pontual = 0.0
+        achou = False
+        for item in pontuais:
+            n = _parse_moeda_brasil(item.get("Valor total") or item.get("Valor unitário"))
+            if n is not None:
+                total_pontual += n
+                achou = True
+        if achou:
+            base["valor_total_materiais_servicos"] = (
+                f"{_formatar_moeda_brasil(total_pontual)}. Total dos valores pontuais confirmados; não representa o valor global do contrato."
+            )
+    else:
+        base["valor_total_materiais_servicos"] = (
+            "Não calculável com segurança. Não há linhas com valor total e quantidade suficientes para soma."
+        )
+
+    meses = _extrair_meses_vigencia(str(base.get("texto_extraido") or ""), base)
+    if mensal_num is not None and meses:
+        base_fixa = mensal_num * meses
+        if tarifas:
+            base["valor_total_estimado_vigencia"] = (
+                f"Base fixa estimada: {_formatar_moeda_brasil(base_fixa)} ({_formatar_moeda_brasil(mensal_num)}/mês x {meses} meses). "
+                "O total final não é calculável com precisão porque existem tarifas variáveis."
+            )
+        else:
+            base["valor_total_estimado_vigencia"] = (
+                f"{_formatar_moeda_brasil(base_fixa)}. Cálculo do sistema: {_formatar_moeda_brasil(mensal_num)}/mês x {meses} meses."
+            )
+    elif mensal_num is not None and "31/12/9999" in clean_text(base.get("periodo_vigencia_formatado")):
+        base["valor_total_estimado_vigencia"] = (
+            "Não calculável com precisão: o contrato possui mensalidade, porém a vigência é por prazo indeterminado."
+        )
+    elif tarifas:
+        base["valor_total_estimado_vigencia"] = (
+            "Não calculável com precisão. O total depende da quantidade de acionistas, operações, itens ou demanda durante a vigência."
+        )
+
+    base["valor_total"] = base.get("valor_contrato_original")
+    return base
+
+
+
+def _filtrar_itens_com_evidencia(base: Dict[str, Any], resultado_bruto: Dict[str, Any]) -> Dict[str, Any]:
+    """Mantém somente itens comerciais sustentados por fonte e trecho específico."""
+    raw = resultado_bruto.get("itens_contrato")
+    if not isinstance(raw, list) or not base.get("auditoria_campos"):
+        return base
+    confirmados: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        fonte = clean_text(item.get("arquivo_fonte") or item.get("fonte") or item.get("Fonte"))
+        pagina = clean_text(item.get("pagina") or item.get("página") or item.get("Página"))
+        evidencia = clean_text(item.get("trecho_evidencia") or item.get("evidencia") or item.get("evidência"))
+        descricao = clean_text(item.get("descricao") or item.get("Descrição"))
+        if not (_valor_informado(descricao) and _valor_informado(fonte) and _texto_evidencia_util(evidencia)):
+            continue
+        novo = dict(item)
+        novo["fonte"] = f"{fonte}" + (f" • p. {pagina}" if _valor_informado(pagina) else "")
+        confirmados.append(novo)
+    base["itens_contrato"] = normalizar_itens_contrato(confirmados)
+    return base
+
+
+def _filtrar_aditivos_com_evidencia(base: Dict[str, Any], resultado_bruto: Dict[str, Any]) -> Dict[str, Any]:
+    """Impede que menção a aditivo no contrato principal vire aditivo inexistente."""
+    raw = resultado_bruto.get("aditivos_contrato")
+    if not isinstance(raw, list) or not base.get("auditoria_campos"):
+        return base
+    confirmados: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        fonte = clean_text(item.get("anexo_origem") or item.get("Anexo do aditivo") or item.get("arquivo_fonte"))
+        evidencia = clean_text(item.get("trecho_evidencia") or item.get("evidencia") or item.get("evidência"))
+        pagina = clean_text(item.get("pagina") or item.get("página"))
+        if not (_valor_informado(fonte) and _texto_evidencia_util(evidencia)):
+            continue
+        novo = dict(item)
+        novo["anexo_origem"] = fonte
+        novo["pagina"] = pagina
+        novo["trecho_evidencia"] = evidencia
+        confirmados.append(novo)
+    base["aditivos_contrato"] = normalizar_aditivos_contrato(confirmados)
+    base["resumo_aditivos"] = _montar_resumo_aditivos(base["aditivos_contrato"])
+    return base
+
+
+def _filtrar_checklist_sem_evidencia(base: Dict[str, Any]) -> Dict[str, Any]:
+    checklist = base.get("checklist") if isinstance(base.get("checklist"), list) else []
+    validos = []
+    for item in checklist:
+        if not isinstance(item, dict):
+            continue
+        evidencia = clean_text(item.get("Evidência") or item.get("evidencia"))
+        if not _texto_evidencia_util(evidencia):
+            continue
+        validos.append(item)
+    base["checklist"] = validos
+    return base
+
+
+def _reconstruir_resumo_e_parecer(base: Dict[str, Any]) -> Dict[str, Any]:
+    """Gera resumo/parecer apenas com fatos já validados, sem texto livre inventado."""
+    if not base.get("auditoria_campos"):
+        return base
+    partes = []
+    tipo = clean_text(base.get("tipo_contrato"))
+    empresa = clean_text(base.get("empresa_grupo_sbf"))
+    contraparte = clean_text(base.get("contraparte"))
+    objetivo = clean_text(base.get("objetivo"))
+    vigencia = clean_text(base.get("periodo_vigencia_formatado") or base.get("vigencia_apos_assinatura"))
+    assinatura = clean_text(base.get("contrato_assinado"))
+    if _valor_informado(tipo):
+        partes.append(tipo.rstrip(" .;"))
+    if _valor_informado(empresa) and _valor_informado(contraparte):
+        partes.append(f"firmado entre {empresa} e {contraparte}")
+    if _valor_informado(objetivo):
+        partes.append(f"Objeto: {objetivo.rstrip(' .;')}")
+    if _valor_informado(vigencia):
+        partes.append(f"Vigência: {vigencia.rstrip(' .;')}")
+    if _valor_informado(assinatura):
+        partes.append(f"Assinatura validada: {assinatura}")
+    base["resumo_executivo"] = ". ".join(partes).strip() + ("." if partes else "Não foi possível consolidar resumo com evidências suficientes.")
+
+    pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
+    criticas = [p for p in pendencias if _norm_token(p.get("Crítico") or p.get("critico")) in ("SIM", "TRUE", "1")]
+    if criticas:
+        base["parecer"] = (
+            f"Revisão obrigatória antes de seguir: existem {len(criticas)} pendência(s) crítica(s) com evidência documental. "
+            "Consulte a aba Pendências e valide o documento original."
+        )
+    elif pendencias:
+        base["parecer"] = (
+            f"A análise identificou {len(pendencias)} ponto(s) de atenção com evidência documental. "
+            "A continuidade depende da validação das recomendações registradas."
+        )
+    else:
+        base["parecer"] = (
+            "Não foram localizadas pendências documentais confirmadas na análise. "
+            "A conferência humana continua recomendada para decisões jurídicas ou financeiras críticas."
+        )
+    return base
+
+
+def _derivar_status_vigencia(base: Dict[str, Any]) -> Dict[str, Any]:
+    if not base.get("auditoria_campos"):
+        return base
+    periodo = clean_text(base.get("periodo_vigencia_formatado"))
+    if "31/12/9999" in periodo:
+        base["status"] = "Ativo"
+        return base
+    datas = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", periodo)
+    if len(datas) >= 2:
+        fim = _parse_data_br_para_datetime(datas[-1])
+        if fim:
+            base["status"] = "Ativo" if fim.date() >= datetime.now().date() else "Encerrado"
+            return base
+    base["status"] = "Não identificado com segurança"
+    return base
+
+
+def _filtrar_assinaturas_com_evidencia(base: Dict[str, Any]) -> Dict[str, Any]:
+    raw = base.get("assinaturas_contrato")
+    if not isinstance(raw, list):
+        raw = []
+    filtradas: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        nome = clean_text(item.get("nome") or item.get("Nome"))
+        evidencia = clean_text(item.get("evidencia") or item.get("evidência") or item.get("Evidência"))
+        fonte = clean_text(item.get("fonte") or item.get("Fonte"))
+        if not _valor_informado(nome) or not _texto_evidencia_util(evidencia) or not _valor_informado(fonte):
+            continue
+        filtradas.append(item)
+    base["assinaturas_contrato"] = filtradas
+    nomes = []
+    for item in filtradas:
+        nome = clean_text(item.get("nome") or item.get("Nome"))
+        if nome and nome not in nomes:
+            nomes.append(nome)
+    if nomes:
+        base["pessoas_que_assinaram"] = "; ".join(nomes)
+        base["contrato_assinado"] = "Sim"
+    elif clean_text(base.get("contrato_assinado")).lower() == "sim":
+        # Só preserva o SIM quando a auditoria do campo confirmou evidência de assinatura.
+        auditoria = _mapa_auditoria(base.get("auditoria_campos", []))
+        item_ass = _encontrar_item_auditoria(auditoria, "contrato_assinado")
+        if not _auditoria_confirma(item_ass):
+            base["contrato_assinado"] = "Não validado"
+            base["pessoas_que_assinaram"] = "Não identificado com segurança"
+    return base
+
+
+def _filtrar_pendencias_sem_evidencia(base: Dict[str, Any]) -> Dict[str, Any]:
+    pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
+    validas = []
+    for p in pendencias:
+        if not isinstance(p, dict):
+            continue
+        evidencia = clean_text(p.get("Evidência") or p.get("evidencia") or p.get("trecho_evidencia"))
+        pagina = clean_text(p.get("Página") or p.get("pagina"))
+        arquivo = clean_text(p.get("Arquivo") or p.get("arquivo") or p.get("Fonte") or p.get("fonte"))
+        # Compatibilidade: aceita recomendação que contenha referência objetiva a cláusula/anexo/página.
+        recomendacao = clean_text(p.get("Recomendação") or p.get("recomendacao"))
+        ref_objetiva = bool(re.search(r"\b(cl[aá]usula|anexo|p[aá]gina|item\s+\d+)\b", f"{evidencia} {recomendacao}", flags=re.IGNORECASE))
+        if (_texto_evidencia_util(evidencia) and _valor_informado(arquivo)) or ref_objetiva:
+            if pagina and "Página" not in p:
+                p["Página"] = pagina
+            if arquivo and "Arquivo" not in p:
+                p["Arquivo"] = arquivo
+            validas.append(p)
+    base["pendencias"] = validas
+    return base
+
+
+def _recalcular_risco_por_evidencias(base: Dict[str, Any]) -> Dict[str, Any]:
+    pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
+    score = 100
+    tem_critica = False
+    tem_alta = False
+    for p in pendencias:
+        critico = _norm_token(p.get("Crítico") or p.get("critico")) in ("SIM", "TRUE", "1")
+        risco = _norm_token(p.get("Risco") or p.get("risco"))
+        if critico:
+            score -= 18
+            tem_critica = True
+        if risco == "ALTO":
+            score -= 15
+            tem_alta = True
+        elif risco in ("MEDIO", "MÉDIO"):
+            score -= 8
+        else:
+            score -= 3
+    score = max(0, min(score, 100))
+    if tem_critica and tem_alta:
+        risco_final = "ALTO"
+    elif score < 85 or tem_critica:
+        risco_final = "MÉDIO"
+    else:
+        risco_final = "BAIXO"
+    base["score"] = score
+    base["risco"] = risco_final
+    return base
+
+
+def _aplicar_auditoria_rigida(base: Dict[str, Any], resultado_bruto: Dict[str, Any]) -> Dict[str, Any]:
+    auditoria = _normalizar_auditoria_campos(resultado_bruto.get("auditoria_campos"))
+    base["auditoria_campos"] = auditoria
+    base["conflitos_documentais"] = resultado_bruto.get("conflitos_documentais") if isinstance(resultado_bruto.get("conflitos_documentais"), list) else []
+    base["valores_estruturados"] = resultado_bruto.get("valores_estruturados") if isinstance(resultado_bruto.get("valores_estruturados"), dict) else {}
+
+    # Só ativa a trava rígida em análises novas que retornaram a matriz de auditoria.
+    if auditoria:
+        mapa = _mapa_auditoria(auditoria)
+        for campo in _CAMPOS_DIRETOS_COM_EVIDENCIA:
+            item = _encontrar_item_auditoria(mapa, campo)
+            if _auditoria_confirma(item):
+                valor_auditado = clean_text(item.get("Valor"))
+                if _valor_informado(valor_auditado):
+                    base[campo] = valor_auditado
+            else:
+                base[campo] = _valor_nao_confirmado(campo)
+
+        # Campos calculados exigem ao menos a base documental correspondente.
+        for campo in _CAMPOS_CALCULADOS_OU_CONSOLIDADOS:
+            item = _encontrar_item_auditoria(mapa, campo)
+            if item and _auditoria_confirma(item) and _valor_informado(item.get("Valor")):
+                base[campo] = clean_text(item.get("Valor"))
+
+    base = _filtrar_itens_com_evidencia(base, resultado_bruto)
+    base = _filtrar_aditivos_com_evidencia(base, resultado_bruto)
+    base = _aplicar_financeiro_confiavel(base, resultado_bruto)
+    base = _filtrar_assinaturas_com_evidencia(base)
+    base = _filtrar_checklist_sem_evidencia(base)
+    base = _filtrar_pendencias_sem_evidencia(base)
+    base = _recalcular_risco_por_evidencias(base)
+    base = _derivar_status_vigencia(base)
+    base = _reconstruir_resumo_e_parecer(base)
+    return base
+
+
+def prompt_ia(texto: str) -> str:
+    """Prompt V2: extração factual + evidência obrigatória por campo."""
+    base = _prompt_ia_legado(texto)
+    return f"""
+MODO DE AUDITORIA DOCUMENTAL ESTRITA — INSTRUÇÕES COM PRIORIDADE MÁXIMA
+
+Você deve separar três coisas: (1) fato literal localizado, (2) cálculo do sistema e (3) interpretação.
+Nunca misture dados de categorias diferentes e nunca complete lacunas por plausibilidade.
+
+REGRAS ANTIALUCINAÇÃO
+- Todo campo principal deve ter uma entrada correspondente em auditoria_campos.
+- Um campo só pode ter status CONFIRMADO quando houver arquivo_fonte, página e trecho_evidencia específico.
+- Para DOCX sem página, use página = "Documento Word — trecho textual".
+- Se a informação não estiver comprovada, valor = "Não identificado com segurança" e status = "NAO_LOCALIZADO".
+- Não invente testemunha ausente, prazo, valor, data, CNPJ, signatário, multa, cláusula ou obrigação.
+- Pendência só pode existir com Arquivo, Página e Evidência. Sem esses três elementos, não crie a pendência.
+- Checklist só pode marcar Concluído quando a evidência trouxer cláusula/página/trecho correspondente.
+
+SEPARAÇÃO FINANCEIRA OBRIGATÓRIA
+- valor_global: apenas total fechado de todo o contrato.
+- valor_fixo_mensal: mensalidade/custo fixo mensal.
+- valor_pontual: implantação, setup ou taxa única.
+- tarifa_unitaria: por acionista, operação, refeição, usuário, item ou unidade.
+- percentual_variavel: taxa/percentual sobre salário, faturamento ou base variável.
+Nunca transforme valor fixo mensal em valor por acionista. Nunca trate implantação como valor global.
+Nunca some mensalidade, implantação, percentuais e tarifas unitárias sem quantidade.
+
+DATAS SEPARADAS
+- data_contrato = data textual do instrumento.
+- data_assinatura = data efetiva da assinatura.
+- data_conclusao_docusign = somente conclusão DocuSign; em assinatura física use "Não aplicável — assinatura física".
+- data_reconhecimento_firma = reconhecimento cartorial, quando houver.
+Não coloque descrições dentro de campos de data.
+
+RETORNO ADICIONAL OBRIGATÓRIO
+Além das chaves já pedidas, retorne:
+1. auditoria_campos: lista com um objeto para CADA campo principal, contendo exatamente:
+   campo, valor, status, tipo_dado, arquivo_fonte, pagina, trecho_evidencia, confianca.
+2. valores_estruturados: objeto contendo:
+   valor_global, valor_fixo_mensal, valores_pontuais, tarifas_unitarias, percentuais_variaveis.
+   Cada bloco deve conter valor, unidade_cobranca, periodicidade, status, arquivo_fonte, pagina e trecho_evidencia.
+3. conflitos_documentais: lista com campo, valores_conflitantes, arquivos, regra_aplicada e decisao.
+4. Cada item de itens_contrato deve também conter tipo_valor, periodicidade, arquivo_fonte, pagina e trecho_evidencia.
+5. Cada item de pendencias deve também conter Arquivo, Página e Evidência.
+6. Cada assinatura deve ter fonte e evidencia específica; não liste nome apenas porque ele aparece no corpo do documento.
+7. Cada aditivo deve também conter pagina e trecho_evidencia específicos do próprio termo aditivo.
+8. Cada item do checklist deve usar Evidência específica, com cláusula/página/trecho; não use textos genéricos como “termo localizado”.
+
+VALIDAÇÃO FINAL
+Antes de responder, confira campo por campo contra os documentos. Quando duas informações verdadeiras forem de categorias diferentes, mantenha-as separadas. Retorne APENAS o JSON completo.
+
+{base}
+"""
+
+
+def _prompt_ia_com_documentos_originais(texto: str, nomes_arquivos: List[str]) -> str:
+    lista = "\n".join(f"- {nome}" for nome in nomes_arquivos) or "- Não informado"
+    return f"""
+Você recebeu os arquivos originais. Eles são a fonte principal e devem ser examinados página por página.
+O texto extraído é apenas índice de apoio. Nome genérico de arquivo não define o tipo documental.
+
+ARQUIVOS RECEBIDOS:
+{lista}
+
+Ao citar evidência, informe o nome exato do arquivo, a página e um trecho curto fiel ao documento.
+Para tabelas, informe também a linha/descrição da tarifa. Para assinaturas físicas, diferencie data de assinatura e reconhecimento de firma.
+
+{prompt_ia(texto)}
+"""
+
+
+def _prompt_verificacao_documental(resultado_preliminar: Dict[str, Any], nomes_arquivos: List[str]) -> str:
+    rascunho = json.dumps(resultado_preliminar, ensure_ascii=False, default=str)
+    if len(rascunho) > 90000:
+        rascunho = rascunho[:90000]
+    lista = "\n".join(f"- {n}" for n in nomes_arquivos) or "- Não informado"
+    return f"""
+Você é o SEGUNDO AUDITOR independente. Revise o JSON preliminar comparando cada afirmação com os arquivos originais anexados.
+Retorne APENAS o JSON completo corrigido, sem comentários.
+
+ARQUIVOS:
+{lista}
+
+TESTES OBRIGATÓRIOS
+1. Elimine qualquer dado sem arquivo, página e trecho de evidência.
+2. Corrija mistura entre valor global, mensalidade, implantação, tarifa unitária e percentual.
+3. Confirme partes/CNPJs apenas no contrato operacional principal; documentos cadastrais são apoio.
+4. Confirme cada assinatura no bloco/certificado correspondente. Não invente testemunha ausente.
+5. Mantenha data do contrato, assinatura, DocuSign e reconhecimento de firma em campos distintos.
+6. Verifique se todas as informações existentes foram transportadas para cards, itens, assinaturas, checklist e parecer.
+7. Pendências sem evidência objetiva devem ser removidas.
+8. Atualize auditoria_campos, valores_estruturados e conflitos_documentais.
+
+JSON PRELIMINAR:
+{rascunho}
+"""
+
+
+def _verificar_resultado_com_sdk_novo(client: Any, modelo: str, resultado_preliminar: Dict[str, Any], uploaded_files: list, nomes_arquivos: List[str]) -> Dict[str, Any]:
+    prompt = _prompt_verificacao_documental(resultado_preliminar, nomes_arquivos)
+    resp = client.models.generate_content(
+        model=modelo,
+        contents=[prompt] + list(uploaded_files or []),
+        config={
+            "temperature": 0.0,
+            "top_p": 0.1,
+            "max_output_tokens": 65535,
+            "response_mime_type": "application/json",
+        },
+    )
+    return _json_da_resposta_gemini(resp)
+
+
+def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_originais: Any = None) -> Dict[str, Any]:
+    """Análise V2 em duas passagens: extração e auditoria independente."""
+    modelos = MODELOS_GEMINI.get(opcao_modelo, MODELOS_GEMINI["Automático recomendado"])
+    nomes_arquivos = [getattr(a, "name", "documento") for a in (arquivos_originais or [])]
+    ultimo_erro_multimodal = None
+    uploaded_files: list = []
+    temp_paths: list = []
+
+    if arquivos_originais:
+        try:
+            genai_new = _importar_google_genai_novo()
+            client = genai_new.Client(api_key=api_key)
+            uploaded_files, temp_paths, erros_upload = _subir_arquivos_originais_gemini(client, arquivos_originais)
+            if erros_upload:
+                with st.expander("⚠️ Detalhes de preparação/upload dos arquivos para o Gemini", expanded=False):
+                    for erro in erros_upload:
+                        st.write(f"- {erro}")
+
+            if uploaded_files:
+                prompt_final = _prompt_ia_com_documentos_originais(texto, nomes_arquivos)
+                for nome in modelos:
+                    try:
+                        preliminar = _gerar_com_sdk_novo(client, nome, prompt_final, uploaded_files)
+                        final = preliminar
+                        try:
+                            auditado = _verificar_resultado_com_sdk_novo(client, nome, preliminar, uploaded_files, nomes_arquivos)
+                            if isinstance(auditado, dict) and auditado:
+                                final = dict(preliminar)
+                                final.update(auditado)
+                                final["verificacao_documental"] = "Concluída em segunda passagem"
+                        except Exception as erro_verificacao:
+                            final["verificacao_documental"] = f"Primeira passagem utilizada; verificação adicional falhou: {erro_verificacao}"
+
+                        final["modelo_ia"] = nome
+                        final["modo_analise_ia"] = "Documentos originais + validação documental em duas passagens"
+                        final["arquivos_originais_enviados"] = len(uploaded_files)
+                        st.success(f"IA utilizada: {nome} • documentos validados em duas passagens")
+                        return final
+                    except Exception as e:
+                        ultimo_erro_multimodal = e
+                        if opcao_modelo != "Automático recomendado":
+                            raise Exception(f"Erro ao usar o modelo {nome} com documentos originais. Detalhe: {e}")
+                        continue
+        except Exception as e:
+            ultimo_erro_multimodal = e
+        finally:
+            try:
+                if 'client' in locals():
+                    _limpar_uploads_gemini(client, uploaded_files, temp_paths)
+            except Exception:
+                pass
+
+    texto_sem_base_confiavel = texto_indica_falha_leitura(texto) and not texto_tem_conteudo_contratual(texto)
+    if arquivos_originais and texto_sem_base_confiavel:
+        raise Exception(
+            "Falha técnica: o arquivo original não pôde ser analisado pela Gemini Files API "
+            "e o texto extraído não contém conteúdo contratual confiável. "
+            "Não foi gerada análise por fallback para evitar cards incorretos. "
+            f"Detalhe Files API: {ultimo_erro_multimodal}"
+        )
+
+    ultimo_erro_texto = None
+    for nome in modelos:
+        try:
+            resultado_json = _gerar_texto_com_sdk_legado(texto, api_key, nome)
+            resultado_json["modelo_ia"] = nome
+            resultado_json["modo_analise_ia"] = "Texto extraído com regras estritas de evidência"
+            if ultimo_erro_multimodal:
+                resultado_json["erro_upload_documentos_originais"] = str(ultimo_erro_multimodal)
+                st.warning("A Files API falhou; foi usado o texto extraído com trava antialucinação.")
+            st.success(f"IA utilizada: {nome} • texto extraído analisado")
+            return resultado_json
+        except Exception as e:
+            ultimo_erro_texto = e
+            if opcao_modelo != "Automático recomendado":
+                raise Exception(f"Erro ao usar o modelo {nome}. Detalhe: {e}")
+            continue
+    raise Exception(
+        "Nenhum modelo Gemini disponível. "
+        f"Erro documentos originais: {ultimo_erro_multimodal}. Erro texto extraído: {ultimo_erro_texto}."
+    )
+
+
+def normalizar(resultado: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalização V2: compatibilidade antiga + validação documental rígida."""
+    bruto = dict(resultado or {})
+    base = _normalizar_legado(bruto)
+    base["texto_extraido"] = bruto.get("texto_extraido") or base.get("texto_extraido") or ""
+    base = _aplicar_auditoria_rigida(base, bruto)
+    base["risco"] = normalize_risco(base.get("risco"))
+    base["score"] = int(min(max(as_float_score(base.get("score")), 0), 100))
+    return base
+
+
+# =========================================================
 # EXCEL - RELATÓRIO EXECUTIVO 100% PROFISSIONAL
 # =========================================================
 def excel_clean(value: Any, padrao: str = "Não localizado") -> str:
@@ -5190,6 +5915,18 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         for cc in range(1, ws.max_column + 1):
             ws.cell(rr, cc).fill = PatternFill("solid", fgColor=fill)
             ws.cell(rr, cc).font = Font(name="Calibri", size=10, bold=True, color=font_color)
+
+    # AUDITORIA DE CAMPOS — fonte, página e trecho que sustentam cada card
+    auditoria_campos = resultado.get("auditoria_campos") if isinstance(resultado.get("auditoria_campos"), list) else []
+    ws = wb.create_sheet("Auditoria de Campos")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Evidências por Campo", 8, 95)
+    if auditoria_campos:
+        df_auditoria = pd.DataFrame(auditoria_campos)
+    else:
+        df_auditoria = pd.DataFrame([{"Status": "Auditoria de evidências não disponível para este registro antigo."}])
+    _write_dataframe_table(ws, 5, df_auditoria, {
+        "A": 31, "B": 46, "C": 20, "D": 22, "E": 38, "F": 16, "G": 72, "H": 12,
+    }, 54)
 
     # TEXTO EXTRAÍDO
     ws = wb.create_sheet("Texto Extraído")
@@ -6138,7 +6875,7 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
     """Monta tabela executiva de assinaturas para tela e Excel."""
     linhas: List[Dict[str, Any]] = []
     raw = resultado.get("assinaturas_contrato")
-    data_padrao = clean_text(resultado.get("data_conclusao_docusign") or resultado.get("data_assinatura") or resultado.get("data_contrato"))
+    data_padrao = clean_text(resultado.get("data_assinatura") or resultado.get("data_conclusao_docusign") or resultado.get("data_contrato"))
     fonte_padrao = "DocuSign / contrato" if "docusign" in clean_text(resultado.get("alerta_assinatura")).lower() or _valor_informado(resultado.get("data_conclusao_docusign")) else "Contrato"
     status_padrao = "Assinado" if clean_text(resultado.get("contrato_assinado")).lower() == "sim" else "Não localizado"
     evidencia_padrao = clean_text(resultado.get("alerta_assinatura") or "Evidência de assinatura conforme documentos analisados.")
@@ -6191,7 +6928,7 @@ def render_assinaturas_contrato(resultado: Dict[str, Any]) -> None:
     df_ass = montar_df_assinaturas(resultado)
     total = 0 if (len(df_ass) == 1 and clean_text(df_ass.iloc[0].get("Nome")) == "Não localizado") else len(df_ass)
     contrato_assinado = clean_text(resultado.get("contrato_assinado") or "Não localizado")
-    data_principal = clean_text(resultado.get("data_conclusao_docusign") or resultado.get("data_assinatura") or "Não localizado")
+    data_principal = clean_text(resultado.get("data_assinatura") or resultado.get("data_conclusao_docusign") or "Não localizado")
     alerta = clean_text(resultado.get("alerta_assinatura") or "Valide a evidência de assinatura nos documentos originais.")
 
     c1, c2, c3, c4 = st.columns(4)
