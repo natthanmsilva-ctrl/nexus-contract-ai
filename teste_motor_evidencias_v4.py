@@ -98,11 +98,17 @@ raw = {
 
 resultado = aplicar_motor_evidencias_v4(raw, raw)
 assert resultado["periodo_vigencia_formatado"] == "Início 26/10/2023 até 31/12/9999"
-assert "situação operacional atual não confirmada" in resultado["status"].lower()
+assert resultado["status"] == "Vigente por prazo indeterminado"
+assert resultado["status_contratual"] == "Vigente por prazo indeterminado"
+assert resultado["situacao_operacional"] == "Não confirmada nos documentos analisados"
+assert resultado["tipo_vigencia"] == "Prazo indeterminado"
 assert "R$ 3.000,00" in resultado["valor_total_materiais_servicos"]
 assert "R$ 4.000,00/mês" in resultado["valor_total_materiais_servicos"]
 assert "não calculável" in resultado["valor_total_estimado_vigencia"].lower()
 assert resultado["contrato_assinado"] == "Sim"
 assert len(resultado["assinaturas_contrato"]) == 2
-assert resultado["score"] >= 70
+assert resultado["confianca_extracao"] >= 70
+assert resultado["risco"] in {"BAIXO", "MÉDIO", "ALTO"}
+assert len(resultado["checklist"]) >= 10
+assert "indicadores_pendencias" in resultado
 print("OK - Motor de Evidências V4 validado")

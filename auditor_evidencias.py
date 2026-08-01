@@ -28,7 +28,10 @@ CAMPOS_OFICIAIS_V4: List[Tuple[str, str]] = [
     ("Condição de Pagamento em Dias", "condicao_pagamento_dias"),
     ("Multa", "multa"),
     ("Vigência após a data de assinatura", "vigencia_apos_assinatura"),
+    ("Tipo de Vigência", "tipo_vigencia"),
     ("Período de Vigência", "periodo_vigencia_formatado"),
+    ("Status Contratual", "status_contratual"),
+    ("Situação Operacional", "situacao_operacional"),
     ("Resumo de Aditivos", "resumo_aditivos"),
     ("Rescisão e Indenização", "rescisao_indenizacao"),
     ("Anticorrupção", "anticorrupcao"),
@@ -61,6 +64,7 @@ CAMPOS_CRITICOS = {
     "descricao_servico_material",
     "vigencia_apos_assinatura",
     "periodo_vigencia_formatado",
+    "status_contratual",
     "data_assinatura",
     "contrato_assinado",
 }
@@ -80,6 +84,10 @@ ALIASES_CAMPOS = {
     "periodo_de_vigencia": "periodo_vigencia_formatado",
     "periodo_vigencia": "periodo_vigencia_formatado",
     "vigencia_formatada": "periodo_vigencia_formatado",
+    "tipo_de_vigencia": "tipo_vigencia",
+    "status_contratual": "status_contratual",
+    "situacao_operacional": "situacao_operacional",
+    "situação_operacional": "situacao_operacional",
     "data_do_contrato": "data_contrato",
     "data_de_assinatura": "data_assinatura",
     "data_de_conclusao_docusign": "data_conclusao_docusign",
@@ -141,7 +149,23 @@ VALOR_GLOBAL, IMPLANTACAO_UNICA, MENSAL_FIXO, UNITARIO_VARIAVEL, PERCENTUAL_VARI
 - Tarifa por acionista, operação, refeição, vaga, usuário, trabalhador, item ou unidade: variável.
 - Percentual sobre salário/faturamento/base: variável.
 Nunca some implantação com mensalidade como se fosse valor global. Nunca calcule total variável sem quantidade e prazo confirmados.
-Cada item_contrato deve conter: descricao, tipo, natureza_valor, quantidade, unidade, valor_unitario, valor_total, periodicidade, arquivo_fonte, pagina, clausula_secao e trecho_evidencia.
+Cada item_contrato deve conter: descricao, tipo, grupo_tabela, natureza_valor, quantidade, unidade, valor_unitario, valor_total, periodicidade, faixa_condicao, condicao_comercial, arquivo_fonte, pagina, clausula_secao e trecho_evidencia.
+
+EXTRAÇÃO COMPLETA DA TABELA COMERCIAL — OBRIGATÓRIA
+- Localize todos os anexos de remuneração, preços, tarifas, percentuais, faixas, eventos e reembolsos.
+- Retorne UMA LINHA para CADA linha comercial da tabela. Não resuma, não selecione exemplos e não limite a quantidade.
+- Continue a leitura quando a tabela prosseguir em outra página.
+- Preserve itens com valor textual, como ISENTO, TAXA CORREIO, conforme tabela, percentual ou faixa.
+- Não converta ausência de valor em zero. R$ 0,00 somente quando o documento declarar isenção/gratuidade/zero.
+- Diferencie implantação única, mensalidade fixa, tarifa por faixa, tarifa por evento, percentual e reembolso.
+- Retorne metricas_tabela_comercial com itens_encontrados_documento, itens_exibidos_auditor, cobertura_tabela_percentual, paginas_tabela_comercial e grupos_tabela_comercial.
+- Antes de concluir, conte as linhas da tabela e confira se a quantidade em itens_contrato é compatível.
+
+INDICADORES SEPARADOS
+- status_contratual descreve apenas a vigência documental.
+- situacao_operacional não pode ser presumida; use “Não confirmada nos documentos analisados” quando faltar prova corporativa atual.
+- confianca_extracao mede qualidade/cobertura da extração.
+- risco descreve risco contratual; não use campos ausentes para inflar ou reduzir artificialmente o risco jurídico.
 
 ASSINATURAS
 Cada assinatura deve conter: nome, papel_cargo, categoria (REPRESENTANTE_CONTRATANTE, REPRESENTANTE_CONTRAPARTE, TESTEMUNHA, APROVADOR, OUTRO), email, data_assinatura, data_reconhecimento_firma, fonte, pagina e evidencia.
@@ -178,6 +202,9 @@ Reprove ou corrija qualquer item que viole uma das regras abaixo:
 - endereço usado como local de prestação sem cláusula expressa;
 - valor mensal convertido em valor por unidade;
 - implantação somada à mensalidade como valor global;
+- tabela comercial resumida, truncada ou limitada a poucos exemplos;
+- linha com “isento”, “taxa Correio”, faixa ou valor textual descartada;
+- ausência de valor convertida artificialmente em R$ 0,00;
 - tarifa variável totalizada sem quantidade/prazo;
 - prazo mínimo confundido com vigência total;
 - prazo indeterminado convertido em data real de encerramento;
@@ -434,6 +461,7 @@ def _natureza_item(item: Mapping[str, Any]) -> str:
         "UNITARIO_VARIAVEL": "UNITARIO_VARIAVEL",
         "PERCENTUAL_VARIAVEL": "PERCENTUAL_VARIAVEL",
         "REEMBOLSO": "REEMBOLSO",
+        "ISENTO": "ISENTO",
     }
     if explicita in mapa_exp:
         return mapa_exp[explicita]
@@ -514,8 +542,14 @@ def _quantidade_num(valor: Any) -> Optional[float]:
 
 
 def _financeiro(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditoria: List[Dict[str, Any]]) -> None:
-    itens = _normalizar_itens(raw.get("itens_contrato") or base.get("itens_contrato"))
+    # Une itens da IA e do extrator determinístico. A IA não pode reduzir uma
+    # tabela comercial completa a poucos exemplos.
+    itens_raw = raw.get("itens_contrato") if isinstance(raw.get("itens_contrato"), list) else []
+    itens_base = base.get("itens_contrato") if isinstance(base.get("itens_contrato"), list) else []
+    itens = _normalizar_itens(list(itens_base) + list(itens_raw))
     base["itens_contrato"] = itens
+    if isinstance(raw.get("metricas_tabela_comercial"), Mapping):
+        base["metricas_tabela_comercial"] = dict(raw.get("metricas_tabela_comercial"))
 
     estruturados = raw.get("valores_estruturados") if isinstance(raw.get("valores_estruturados"), Mapping) else {}
     mapa = _mapa_auditoria(auditoria)
@@ -566,6 +600,9 @@ def _financeiro(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditori
             mensais.append((total if total is not None else unit, item))
         elif natureza in {"UNITARIO_VARIAVEL", "PERCENTUAL_VARIAVEL", "REEMBOLSO"}:
             variaveis.append(item)
+        elif natureza == "ISENTO":
+            # Zero só é mantido quando o documento declara isenção; não entra em soma.
+            continue
         elif valor_calc is not None:
             totais_mesma_natureza.append(valor_calc)
 
@@ -666,38 +703,47 @@ def _vigencia_status(base: MutableMapping[str, Any], auditoria: List[Dict[str, A
     vigencia = " ".join(_texto(base.get(c)) for c in ("vigencia_apos_assinatura", "periodo_vigencia_formatado"))
     low = _sem_acento(vigencia).lower()
     inicio = _data_br(base.get("data_assinatura")) or _data_br(base.get("data_contrato")) or _data_br(vigencia)
+    mapa = _mapa_auditoria(auditoria)
+    fonte_vig = mapa.get("vigencia_apos_assinatura") or mapa.get("periodo_vigencia_formatado") or _linha_nao_localizada("periodo_vigencia_formatado")
 
     if "indeterminado" in low:
-        if inicio:
-            base["periodo_vigencia_formatado"] = f"Início {inicio} até 31/12/9999"
-        else:
-            base["periodo_vigencia_formatado"] = "Prazo indeterminado; data de início não identificada com segurança"
-        base["status"] = "Vigência contratual sem término definido; situação operacional atual não confirmada"
+        base["tipo_vigencia"] = "Prazo indeterminado"
+        base["periodo_vigencia_formatado"] = f"Início {inicio} até 31/12/9999" if inicio else "Prazo indeterminado; data de início não identificada com segurança"
+        base["status_contratual"] = "Vigente por prazo indeterminado"
     else:
+        base["tipo_vigencia"] = "Prazo determinado" if re.search(r"\b\d{2}/\d{2}/\d{4}\b", vigencia) else "Não identificado com segurança"
         datas = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", _texto(base.get("periodo_vigencia_formatado")))
         if len(datas) >= 2:
             try:
                 fim = datetime.strptime(datas[-1], "%d/%m/%Y")
-                if fim.date() < datetime.now().date():
-                    base["status"] = f"Vigência documental encerrada em {datas[-1]}; situação operacional atual não confirmada"
-                else:
-                    base["status"] = f"Vigência documental prevista até {datas[-1]}; situação operacional atual não confirmada"
+                base["status_contratual"] = f"Vigência documental encerrada em {datas[-1]}" if fim.date() < datetime.now().date() else f"Vigência documental prevista até {datas[-1]}"
             except Exception:
-                base["status"] = "Situação operacional atual não confirmada"
+                base["status_contratual"] = "Situação contratual não identificada com segurança"
         else:
-            base["status"] = "Situação operacional atual não confirmada"
+            base["status_contratual"] = "Situação contratual não identificada com segurança"
 
-    mapa = _mapa_auditoria(auditoria)
-    linha = mapa.get("periodo_vigencia_formatado") or _linha_nao_localizada("periodo_vigencia_formatado")
-    if _valor_util(base.get("periodo_vigencia_formatado")):
+    base["situacao_operacional"] = "Não confirmada nos documentos analisados"
+    base["status"] = base["status_contratual"]  # compatibilidade com histórico/dashboard
+
+    derivados = {
+        "tipo_vigencia": (base.get("tipo_vigencia"), "INTERPRETACAO"),
+        "periodo_vigencia_formatado": (base.get("periodo_vigencia_formatado"), "CALCULO_SISTEMA" if "31/12/9999" in _texto(base.get("periodo_vigencia_formatado")) else "DADO_DOCUMENTAL"),
+        "status_contratual": (base.get("status_contratual"), "INTERPRETACAO"),
+        "situacao_operacional": (base.get("situacao_operacional"), "INTERPRETACAO"),
+    }
+    for campo, (valor, tipo_dado) in derivados.items():
+        linha = mapa.get(campo) or _linha_nao_localizada(campo)
         linha.update({
-            "valor": _texto(base.get("periodo_vigencia_formatado")),
-            "status": "CALCULADO" if "31/12/9999" in _texto(base.get("periodo_vigencia_formatado")) else linha.get("status", "CONFIRMADO"),
-            "tipo_dado": "CALCULO_SISTEMA" if "31/12/9999" in _texto(base.get("periodo_vigencia_formatado")) else "DADO_DOCUMENTAL",
-            "trecho_evidencia": linha.get("trecho_evidencia") or "Prazo documental consolidado sem confundir permanência mínima com término da vigência.",
-            "confianca": max(_confianca(linha.get("confianca")), 85),
+            "valor": _texto(valor),
+            "status": "CALCULADO" if tipo_dado != "DADO_DOCUMENTAL" else linha.get("status", "CONFIRMADO"),
+            "tipo_dado": tipo_dado,
+            "arquivo_fonte": linha.get("arquivo_fonte") or fonte_vig.get("arquivo_fonte") or "Contrato principal",
+            "pagina": linha.get("pagina") or fonte_vig.get("pagina") or "Cláusula de vigência",
+            "clausula_secao": linha.get("clausula_secao") or fonte_vig.get("clausula_secao") or "Vigência e término",
+            "trecho_evidencia": linha.get("trecho_evidencia") or fonte_vig.get("trecho_evidencia") or "Prazo documental consolidado sem confundir permanência mínima com término da vigência.",
+            "confianca": max(_confianca(linha.get("confianca")), 90 if inicio else 75),
         })
-    mapa["periodo_vigencia_formatado"] = linha
+        mapa[campo] = linha
     auditoria[:] = _ordenar_auditoria(mapa.values())
 
 
@@ -891,21 +937,110 @@ def _conflitos(raw: Any) -> List[Dict[str, Any]]:
     return saida
 
 
+
+def _gerar_checklist_deterministico(base: Mapping[str, Any], auditoria: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reconstrói o checklist a partir da matriz de evidências, sem depender do resumo da IA."""
+    mapa = _mapa_auditoria(auditoria)
+
+    grupos = [
+        ("Identificação das partes e CNPJs", ["empresa_grupo_sbf", "cnpj_empresa_grupo", "contraparte", "cnpj_contraparte"], "Alto", "Sim"),
+        ("Definição do objeto e escopo", ["objetivo", "descricao_servico_material"], "Alto", "Sim"),
+        ("Vigência contratual", ["vigencia_apos_assinatura", "periodo_vigencia_formatado", "tipo_vigencia"], "Alto", "Sim"),
+        ("Assinaturas das partes", ["data_assinatura", "pessoas_que_assinaram"], "Alto", "Sim"),
+        ("Valores, preços e tarifas", ["valor_contrato_original", "valor_mensal_estimado", "valor_total_materiais_servicos"], "Médio", "Sim"),
+        ("Forma e condição de pagamento", ["forma_pagamento", "condicao_pagamento_dias"], "Médio", "Não"),
+        ("Multas e juros", ["multa"], "Médio", "Não"),
+        ("Rescisão e indenização", ["rescisao_indenizacao"], "Médio", "Sim"),
+        ("Proteção de dados (LGPD)", ["protecao_dados_lgpd"], "Médio", "Não"),
+        ("Anticorrupção", ["anticorrupcao"], "Médio", "Não"),
+    ]
+    saida: List[Dict[str, Any]] = []
+    for titulo, campos, peso, critico in grupos:
+        evidencias = [mapa.get(c) for c in campos if mapa.get(c)]
+        confirmadas = [e for e in evidencias if _evidencia_confirma(e) or (_status(e.get("status")) == "CALCULADO" and _valor_util(e.get("valor")))]
+        faltantes = [c for c in campos if not (mapa.get(c) and (_evidencia_confirma(mapa.get(c)) or (_status(mapa.get(c).get("status")) == "CALCULADO" and _valor_util(mapa.get(c).get("valor")))))]
+        ref = confirmadas[0] if confirmadas else (evidencias[0] if evidencias else {})
+        if not faltantes:
+            status = "Confirmado"
+        elif confirmadas:
+            status = "Atenção - confirmação parcial"
+        else:
+            status = "Não localizado"
+        ev_textos = []
+        for e in confirmadas[:3]:
+            trecho = _texto(e.get("trecho_evidencia"))
+            if _evidencia_util(trecho):
+                ev_textos.append(trecho)
+        evidencia = " | ".join(dict.fromkeys(ev_textos)) or ("Campos não localizados: " + ", ".join(faltantes))
+        saida.append({
+            "Validação": titulo,
+            "Status": status,
+            "Peso de risco": peso,
+            "Crítico": critico,
+            "Arquivo": _texto(ref.get("arquivo_fonte")) or "Não localizado",
+            "Página": _texto(ref.get("pagina")) or _texto(ref.get("clausula_secao")) or "Não localizado",
+            "Evidência": evidencia,
+        })
+
+    aditivos = base.get("aditivos_contrato") if isinstance(base.get("aditivos_contrato"), list) else []
+    saida.append({
+        "Validação": "Aditivos",
+        "Status": "Confirmado" if aditivos else "Não aplicável - nenhum aditivo identificado",
+        "Peso de risco": "Médio",
+        "Crítico": "Não",
+        "Arquivo": _texto(aditivos[0].get("Anexo do aditivo") if aditivos else "Não localizado"),
+        "Página": _texto(aditivos[0].get("Página") if aditivos else "Não localizado"),
+        "Evidência": f"{len(aditivos)} aditivo(s) com evidência documental." if aditivos else "Nenhum termo aditivo foi identificado no pacote analisado.",
+    })
+
+    faltantes = [i.get("campo") for i in auditoria if _status(i.get("status")) == "NÃO_LOCALIZADO"]
+    if faltantes:
+        saida.append({
+            "Validação": "Campos não localizados",
+            "Status": "Atenção",
+            "Peso de risco": "Baixo",
+            "Crítico": "Não",
+            "Arquivo": "Matriz de evidências",
+            "Página": "Múltiplas",
+            "Evidência": ", ".join(ROTULO_POR_CAMPO.get(c, c) for c in faltantes),
+        })
+    conflitos = base.get("conflitos_documentais") if isinstance(base.get("conflitos_documentais"), list) else []
+    saida.append({
+        "Validação": "Conflitos documentais",
+        "Status": "Atenção" if conflitos else "Confirmado - nenhum conflito",
+        "Peso de risco": "Alto" if conflitos else "Baixo",
+        "Crítico": "Sim" if conflitos else "Não",
+        "Arquivo": "Múltiplos documentos" if conflitos else "Matriz de evidências",
+        "Página": "Múltiplas" if conflitos else "Não aplicável",
+        "Evidência": f"{len(conflitos)} conflito(s) documental(is) registrado(s)." if conflitos else "Nenhum conflito documental confirmado.",
+    })
+    return saida
+
+
+def _classificar_indicadores_pendencias(base: MutableMapping[str, Any]) -> None:
+    pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
+    criticas = [p for p in pendencias if _token(p.get("Crítico")) in {"SIM", "TRUE", "1"}]
+    pontos = [p for p in pendencias if p not in criticas]
+    campos = base.get("campos_nao_localizados") if isinstance(base.get("campos_nao_localizados"), list) else []
+    base["indicadores_pendencias"] = {
+        "pendencias_criticas": len(criticas),
+        "pontos_atencao": len(pontos),
+        "campos_nao_localizados": len(campos),
+    }
+
 def _score_risco(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]) -> None:
+    """Calcula confiança de extração separadamente do risco contratual."""
     mapa = _mapa_auditoria(auditoria)
     pesos_total = 0
     pesos_confirmados = 0
     inferidos = 0
-    conflitos = len(base.get("conflitos_documentais") or [])
     nao_localizados = 0
-
     for _, campo in CAMPOS_OFICIAIS_V4:
+        # Campos derivados não devem reduzir a cobertura quando a base documental existe.
         peso = 3 if campo in CAMPOS_CRITICOS else 1
         pesos_total += peso
         item = mapa.get(campo)
-        if _evidencia_confirma(item):
-            pesos_confirmados += peso
-        elif item and _status(item.get("status")) == "CALCULADO" and _valor_util(item.get("valor")):
+        if _evidencia_confirma(item) or (item and _status(item.get("status")) == "CALCULADO" and _valor_util(item.get("valor"))):
             pesos_confirmados += peso
         elif item and _status(item.get("status")) == "INFERIDO":
             inferidos += 1
@@ -915,80 +1050,83 @@ def _score_risco(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]
     cobertura = round((pesos_confirmados / pesos_total) * 100) if pesos_total else 0
     paginas_processadas = int(base.get("paginas_processadas") or 0) if str(base.get("paginas_processadas") or "").isdigit() else 0
     total_paginas = int(base.get("total_paginas") or 0) if str(base.get("total_paginas") or "").isdigit() else 0
-    cobertura_paginas = round((paginas_processadas / total_paginas) * 100) if total_paginas else 100
+    paginas_pct = round((paginas_processadas / total_paginas) * 100) if total_paginas else 100
+    conflitos = len(base.get("conflitos_documentais") or [])
+    confianca = max(0, min(100, round(cobertura * 0.85 + paginas_pct * 0.15 - inferidos - conflitos * 2)))
 
     pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
-    penalidade = conflitos * 8 + inferidos * 2
-    tem_critico_alto = False
-    tem_critico = False
-    for p in pendencias:
-        risco = _token(p.get("Risco"))
-        critico = _token(p.get("Crítico")) in {"SIM", "TRUE", "1"}
-        if critico:
-            penalidade += 8
-            tem_critico = True
-        if risco == "ALTO":
-            penalidade += 8
-            tem_critico_alto = tem_critico_alto or critico
-        elif risco == "MEDIO":
-            penalidade += 4
-        else:
-            penalidade += 1
-
-    score = max(0, min(100, round(cobertura * 0.75 + cobertura_paginas * 0.25 - penalidade)))
-    if tem_critico_alto or score < 60:
+    tem_critico_alto = any(_token(p.get("Crítico")) in {"SIM", "TRUE", "1"} and _token(p.get("Risco")) == "ALTO" for p in pendencias)
+    tem_critico = any(_token(p.get("Crítico")) in {"SIM", "TRUE", "1"} for p in pendencias)
+    tem_alto = any(_token(p.get("Risco")) == "ALTO" for p in pendencias)
+    if tem_critico_alto:
         risco_final = "ALTO"
-    elif tem_critico or score < 85 or conflitos:
+    elif tem_critico or tem_alto or conflitos:
         risco_final = "MÉDIO"
     else:
         risco_final = "BAIXO"
 
-    base["score"] = score
+    base["confianca_extracao"] = confianca
+    base["score"] = confianca  # compatibilidade com histórico antigo
     base["risco"] = risco_final
     base["metricas_confianca"] = {
         "cobertura_campos_percentual": cobertura,
-        "cobertura_paginas_percentual": cobertura_paginas,
+        "paginas_processadas_percentual": paginas_pct,
+        "cobertura_paginas_percentual": paginas_pct,
         "campos_confirmados_ponderados": pesos_confirmados,
         "campos_totais_ponderados": pesos_total,
         "campos_nao_localizados": nao_localizados,
         "campos_inferidos": inferidos,
         "conflitos": conflitos,
         "pendencias_com_evidencia": len(pendencias),
-        "score_final": score,
+        "confianca_extracao_percentual": confianca,
+        "score_final": confianca,
     }
 
 
 def _resumo_parecer(base: MutableMapping[str, Any]) -> None:
-    partes = []
     tipo = _texto(base.get("tipo_contrato"))
     contratante = _texto(base.get("empresa_grupo_sbf"))
     contraparte = _texto(base.get("contraparte"))
     objeto = _texto(base.get("objetivo") or base.get("descricao_servico_material"))
     periodo = _texto(base.get("periodo_vigencia_formatado") or base.get("vigencia_apos_assinatura"))
+    status = _texto(base.get("status_contratual") or base.get("status"))
+    operacional = _texto(base.get("situacao_operacional"))
 
+    partes = []
     if _valor_util(tipo):
         partes.append(tipo.rstrip("."))
     if _valor_util(contratante) and _valor_util(contraparte):
         partes.append(f"firmado entre {contratante} e {contraparte}")
     if _valor_util(objeto):
-        partes.append(f"objeto: {objeto.rstrip('.')}")
+        partes.append(f"objeto: {objeto.rstrip('.')}" )
     if _valor_util(periodo):
-        partes.append(f"vigência documental: {periodo.rstrip('.')}")
+        partes.append(f"período técnico: {periodo.rstrip('.')}" )
+    if _valor_util(status):
+        partes.append(f"status contratual: {status.rstrip('.')}" )
+    if _valor_util(operacional):
+        partes.append(f"situação operacional: {operacional.rstrip('.')}" )
     partes.append(f"assinatura validada: {_texto(base.get('contrato_assinado')) or 'Não validada'}")
     base["resumo_executivo"] = ". ".join(partes).strip() + "."
 
-    pontos = []
-    if _valor_util(base.get("valor_contrato_original")):
-        pontos.append(_texto(base.get("valor_contrato_original")))
-    if _valor_util(base.get("valor_mensal_estimado")):
-        pontos.append(_texto(base.get("valor_mensal_estimado")))
-    pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
-    if pendencias:
-        pontos.append(f"Foram identificados {len(pendencias)} ponto(s) de atenção com evidência documental.")
-    else:
-        pontos.append("Não foram identificadas pendências críticas com evidência documental no pacote analisado.")
-    pontos.append("A situação operacional atual deve ser confirmada nos sistemas corporativos quando não houver documento de encerramento ou confirmação de vigência atual.")
-    base["parecer"] = " ".join(pontos)
+    financeiros = [
+        _texto(base.get("valor_contrato_original")),
+        _texto(base.get("valor_mensal_estimado")),
+        _texto(base.get("valor_total_materiais_servicos")),
+        _texto(base.get("valor_total_estimado_vigencia")),
+    ]
+    financeiros = [x for x in financeiros if _valor_util(x)]
+    ind = base.get("indicadores_pendencias") if isinstance(base.get("indicadores_pendencias"), Mapping) else {}
+    parecer = []
+    if financeiros:
+        parecer.append("Financeiro: " + " ".join(financeiros))
+    parecer.append(
+        f"Pendências críticas: {ind.get('pendencias_criticas', 0)}; "
+        f"pontos de atenção: {ind.get('pontos_atencao', 0)}; "
+        f"campos não localizados: {ind.get('campos_nao_localizados', 0)}."
+    )
+    parecer.append("Valores de implantação, mensalidade e tarifas variáveis permanecem separados por natureza e periodicidade.")
+    parecer.append("A situação operacional atual deve ser confirmada nos sistemas corporativos quando o pacote documental não trouxer prova atual de encerramento ou continuidade.")
+    base["parecer"] = " ".join(parecer)
 
 
 def _mapa_cards(auditoria: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -1065,13 +1203,14 @@ def aplicar_motor_evidencias_v4(
     else:
         base["resumo_aditivos"] = "Nenhum aditivo identificado com evidência documental no pacote analisado."
 
-    base["checklist"] = _filtrar_checklist(bruto.get("checklist") or base.get("checklist"))
     base["pendencias"] = _filtrar_pendencias(bruto.get("pendencias") or base.get("pendencias"))
 
     auditoria = _ordenar_auditoria(auditoria)
     base["auditoria_campos"] = auditoria
     base["mapa_evidencias_cards"] = _mapa_cards(auditoria)
     base["campos_nao_localizados"] = [i["campo"] for i in auditoria if _status(i.get("status")) == "NÃO_LOCALIZADO"]
+    base["checklist"] = _gerar_checklist_deterministico(base, auditoria)
+    _classificar_indicadores_pendencias(base)
     _score_risco(base, auditoria)
     _resumo_parecer(base)
     base["motor_evidencias_v4"] = "Ativo — evidência obrigatória, consolidação determinística e score calculado"

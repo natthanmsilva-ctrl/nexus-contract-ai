@@ -42,6 +42,11 @@ from auditor_evidencias import (
     aplicar_motor_evidencias_v4,
     linhas_auditoria_para_tela,
 )
+from extrator_tabela_comercial import (
+    extrair_tabela_comercial_completa,
+    mesclar_itens_comerciais,
+    calcular_metricas_tabela_comercial,
+)
 
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
@@ -91,7 +96,10 @@ CAMPOS_OFICIAIS = [
     ("Condição de Pagamento em Dias", "condicao_pagamento_dias"),
     ("Multa", "multa"),
     ("Vigência após a data de assinatura", "vigencia_apos_assinatura"),
+    ("Tipo de Vigência", "tipo_vigencia"),
     ("Período de Vigência", "periodo_vigencia_formatado"),
+    ("Status Contratual", "status_contratual"),
+    ("Situação Operacional", "situacao_operacional"),
     ("Resumo de Aditivos", "resumo_aditivos"),
     ("Rescisão e Indenização", "rescisao_indenizacao"),
     ("Anticorrupção", "anticorrupcao"),
@@ -109,7 +117,8 @@ CAMPOS_OFICIAIS = [
 CAMPOS_JSON_OBRIGATORIOS = ", ".join([campo for _, campo in CAMPOS_OFICIAIS] + [
     "aditivos_contrato",
     "contraparte", "fornecedor",
-    "contrato_assinado", "alerta_assinatura", "status", "risco", "score",
+    "contrato_assinado", "alerta_assinatura", "status", "status_contratual", "situacao_operacional", "tipo_vigencia",
+    "risco", "score", "confianca_extracao", "indicadores_pendencias", "metricas_tabela_comercial",
     "resumo_executivo", "parecer", "checklist", "pendencias", "itens_contrato", "assinaturas_contrato",
     "data_reconhecimento_firma"
 ])
@@ -1313,6 +1322,9 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         evidencia = clean_text(pegar(item, ["evidencia", "evidência", "trecho_evidencia", "trecho de evidência"], "Não localizado"))
         natureza_valor = clean_text(pegar(item, ["natureza_valor", "natureza do valor", "tipo_valor", "tipo de valor"], "Não localizado"))
         periodicidade = clean_text(pegar(item, ["periodicidade", "recorrencia", "recorrência"], "Não localizado"))
+        grupo_tabela = clean_text(pegar(item, ["grupo_tabela", "grupo tabela", "grupo", "tabela", "secao_tabela", "seção tabela"], "Não localizado"))
+        faixa_condicao = clean_text(pegar(item, ["faixa_condicao", "faixa condição", "faixa", "condicao_faixa", "condição faixa"], "Não localizado"))
+        condicao_comercial = clean_text(pegar(item, ["condicao_comercial", "condição comercial", "regra_comercial", "observacao_comercial", "observação comercial"], "Não localizado"))
         status_evidencia = clean_text(pegar(item, ["status_evidencia", "status de evidência", "status"], "Não localizado"))
 
         # Não transforme taxa/encargos em valor unitário. Eles são condições comerciais.
@@ -1329,6 +1341,9 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
             "Vencimento / Prazo": vencimento,
             "Natureza do valor": natureza_valor,
             "Periodicidade": periodicidade,
+            "Grupo/Tabela": grupo_tabela,
+            "Faixa/Condição": faixa_condicao,
+            "Condição comercial": condicao_comercial,
             "Fonte": fonte,
             "Página": pagina,
             "Status de evidência": status_evidencia,
@@ -6524,6 +6539,36 @@ def render_metric(label: str, value: Any) -> str:
     return f'<div class="metric-card"><small>{safe(label)}</small><h2>{safe(value)}</h2></div>'
 
 
+def obter_indicadores_resultado(resultado: Dict[str, Any]) -> Dict[str, Any]:
+    """Separa risco contratual, confiança da extração e pendências por natureza."""
+    indicadores = resultado.get("indicadores_pendencias") if isinstance(resultado.get("indicadores_pendencias"), dict) else {}
+    pendencias = resultado.get("pendencias") if isinstance(resultado.get("pendencias"), list) else []
+    criticas_fallback = sum(1 for p in pendencias if clean_text(p.get("Crítico") or p.get("critico")).upper() in ("SIM", "TRUE", "1"))
+    pontos_fallback = max(0, len(pendencias) - criticas_fallback)
+    campos_fallback = len(resultado.get("campos_nao_localizados", [])) if isinstance(resultado.get("campos_nao_localizados"), list) else 0
+    return {
+        "status_contratual": resultado.get("status_contratual") or resultado.get("status") or "Não identificado com segurança",
+        "situacao_operacional": resultado.get("situacao_operacional") or "Não confirmada nos documentos analisados",
+        "risco_contratual": normalize_risco(resultado.get("risco")),
+        "confianca_extracao": resultado.get("confianca_extracao", resultado.get("score", 0)),
+        "pendencias_criticas": indicadores.get("pendencias_criticas", criticas_fallback),
+        "pontos_atencao": indicadores.get("pontos_atencao", pontos_fallback),
+        "campos_nao_localizados": indicadores.get("campos_nao_localizados", campos_fallback),
+    }
+
+
+def render_indicadores_analise(resultado: Dict[str, Any]) -> None:
+    ind = obter_indicadores_resultado(resultado)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.markdown(render_metric("Status contratual", ind["status_contratual"]), unsafe_allow_html=True)
+    c2.markdown(render_metric("Risco contratual", ind["risco_contratual"]), unsafe_allow_html=True)
+    c3.markdown(render_metric("Confiança da extração", f'{ind["confianca_extracao"]}%'), unsafe_allow_html=True)
+    c4.markdown(render_metric("Pend. críticas", ind["pendencias_criticas"]), unsafe_allow_html=True)
+    c5.markdown(render_metric("Pontos de atenção", ind["pontos_atencao"]), unsafe_allow_html=True)
+    c6.markdown(render_metric("Campos não localizados", ind["campos_nao_localizados"]), unsafe_allow_html=True)
+    st.caption(f'Situação operacional: {clean_text(ind["situacao_operacional"])}')
+
+
 def render_filter_metric(label: str, value: Any, filtro: str, ativo: bool = False) -> str:
     """Card clicável do Dashboard. Mantém o usuário na aba Dashboard ao filtrar."""
     classe_ativo = " active" if ativo else ""
@@ -6551,7 +6596,10 @@ CAMPOS_VALORES_VISUAIS = {
     "Condição de Pagamento em Dias": "Prazo",
     "Multa": "Penalidade",
     "Vigência após a data de assinatura": "Vigência",
-    "Período de Vigência": "Período",
+    "Tipo de Vigência": "Natureza do prazo",
+    "Período de Vigência": "Período técnico",
+    "Status Contratual": "Situação documental",
+    "Situação Operacional": "Confirmação corporativa",
     "Resumo de Aditivos": "Aditivos",
     "Rescisão e Indenização": "Encerramento",
     "Anticorrupção": "Compliance",
@@ -6654,21 +6702,32 @@ def _montar_partes_card_valor(label: str, value: Any) -> tuple[str, str, str]:
     # Campos com valor monetário
     valor = _extrair_primeiro_valor_card(txt)
 
-    if label == "Valor Total dos Materiais e Serviços" and valor:
-        return (
-            valor,
-            "Soma dos itens identificados nos documentos analisados. O detalhamento completo fica na tabela de materiais e serviços.",
-            "Soma da tabela",
-        )
+    if label == "Valor Total dos Materiais e Serviços":
+        # Valores de implantação, mensalidade e tarifas variáveis possuem naturezas incompatíveis.
+        # O card não pode transformar o primeiro valor encontrado em uma soma global falsa.
+        if any(t in low for t in ("valores pontuais/implantação", "mensalidades fixas", "tarifa(s) variável", "tarifas variáveis", "separados por natureza")):
+            return (
+                "Valores separados por natureza",
+                txt,
+                "Não representa valor global do contrato",
+            )
+        if valor:
+            return (
+                valor,
+                "Total calculável apenas entre itens da mesma natureza. Consulte a tabela completa para periodicidade e condições.",
+                "Total de natureza compatível",
+            )
 
     if label == "Valor Mensal Estimado" and valor:
+        if "valor fixo mensal confirmado" in low or "mensalidade fixa" in low:
+            return f"{valor}/mês", txt, "Mensalidade fixa"
         unidade = _extrair_unidade_demanda(txt)
         if _parece_valor_unitario_ou_demanda(txt):
             detalhe = (
-                f"O valor mensal varia conforme a quantidade contratada/utilizada. "
-                f"Exemplo: 1 {unidade} = {valor}/mês; 10 unidades = valor multiplicado por 10."
+                f"O valor varia conforme a quantidade contratada/utilizada. "
+                f"Referência documental: {valor} por {unidade}."
             )
-            return f"{valor} por {unidade}/mês", detalhe, "Valor variável"
+            return f"{valor} por {unidade}", detalhe, "Valor variável"
 
         return f"{valor}/mês", "Valor mensal estimado conforme informação localizada nos documentos.", alerta
 
@@ -7031,28 +7090,51 @@ def render_checklist_validacao(resultado: Dict[str, Any]) -> None:
     st.markdown('<div class="section-title">Checklist de validação</div>', unsafe_allow_html=True)
     df_checklist = pd.DataFrame(resultado.get("checklist", []))
     if df_checklist.empty:
-        st.info("Checklist detalhado não disponível para este registro.")
-    else:
-        st.dataframe(df_checklist, use_container_width=True, hide_index=True)
+        st.warning("Nenhum checklist pôde ser reconstruído porque este registro não possui matriz de evidências. Reprocesse o contrato nesta versão.")
+        return
+    ordem = ["Validação", "Status", "Peso de risco", "Crítico", "Arquivo", "Página", "Evidência"]
+    cols = [c for c in ordem if c in df_checklist.columns] + [c for c in df_checklist.columns if c not in ordem]
+    st.dataframe(df_checklist[cols], use_container_width=True, hide_index=True)
 
 
 def render_pendencias_encontradas(resultado: Dict[str, Any]) -> None:
-    st.markdown('<div class="section-title">Pendências encontradas</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Pendências e pontos de atenção</div>', unsafe_allow_html=True)
     pendencias = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
-    if pendencias:
-        for i, pendencia in enumerate(pendencias, 1):
+    campos = resultado.get("campos_nao_localizados", []) if isinstance(resultado.get("campos_nao_localizados"), list) else []
+    criticas = [p for p in pendencias if clean_text(p.get("Crítico") or p.get("critico")).upper() in ("SIM", "TRUE", "1")]
+    pontos = [p for p in pendencias if p not in criticas]
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(render_metric("Pendências críticas", len(criticas)), unsafe_allow_html=True)
+    c2.markdown(render_metric("Pontos de atenção", len(pontos)), unsafe_allow_html=True)
+    c3.markdown(render_metric("Campos não localizados", len(campos)), unsafe_allow_html=True)
+
+    def _render_lista(titulo: str, lista: List[Dict[str, Any]]) -> None:
+        if not lista:
+            return
+        st.markdown(f"#### {titulo}")
+        for i, pendencia in enumerate(lista, 1):
+            fonte = clean_text(pendencia.get("Arquivo") or pendencia.get("Fonte"))
+            pagina = clean_text(pendencia.get("Página") or pendencia.get("pagina"))
+            evidencia = clean_text(pendencia.get("Evidência") or pendencia.get("evidencia"))
             st.markdown(
                 f"""
                 <div class="risk-row">
-                    <b>{i}. {safe(pendencia.get('Pendência', 'Pendência'))}</b><br>
-                    Crítico: {safe(pendencia.get('Crítico', 'N/A'))} • Risco: {safe(pendencia.get('Risco', 'N/A'))}<br>
-                    <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span>
+                    <b>{i}. {safe(pendencia.get('Pendência', 'Ponto de atenção'))}</b><br>
+                    Crítico: {safe(pendencia.get('Crítico', 'Não'))} • Risco: {safe(pendencia.get('Risco', 'Baixo'))}<br>
+                    <span class="subtle">{safe(pendencia.get('Recomendação', 'Validar antes de seguir.'))}</span><br>
+                    <span class="subtle">Fonte: {safe(fonte or 'Não localizada')} • Página: {safe(pagina or 'Não localizada')} • Evidência: {safe(evidencia or 'Não localizada')}</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-    else:
-        st.markdown('<div class="ok-row">Nenhuma pendência crítica localizada.</div>', unsafe_allow_html=True)
+
+    _render_lista("Pendências críticas", criticas)
+    _render_lista("Pontos de atenção", pontos)
+    if campos:
+        st.markdown("#### Campos não localizados nos documentos")
+        st.info(" • ".join(clean_text(c).replace("_", " ").title() for c in campos))
+    if not pendencias and not campos:
+        st.markdown('<div class="ok-row">Nenhuma pendência crítica, ponto de atenção ou campo obrigatório não localizado.</div>', unsafe_allow_html=True)
 
 
 def render_parecer_automatico(resultado: Dict[str, Any]) -> None:
@@ -7216,7 +7298,7 @@ def render_auditoria_evidencias(resultado: Dict[str, Any]) -> None:
     metricas = resultado.get("metricas_confianca") if isinstance(resultado.get("metricas_confianca"), dict) else {}
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(render_metric("Cobertura dos campos", f"{metricas.get('cobertura_campos_percentual', 0)}%"), unsafe_allow_html=True)
-    c2.markdown(render_metric("Cobertura das páginas", f"{metricas.get('cobertura_paginas_percentual', 0)}%"), unsafe_allow_html=True)
+    c2.markdown(render_metric("Páginas processadas", f"{metricas.get('paginas_processadas_percentual', metricas.get('cobertura_paginas_percentual', 0))}%"), unsafe_allow_html=True)
     c3.markdown(render_metric("Campos não localizados", metricas.get("campos_nao_localizados", len(resultado.get("campos_nao_localizados", [])))), unsafe_allow_html=True)
     c4.markdown(render_metric("Conflitos", metricas.get("conflitos", len(resultado.get("conflitos_documentais", [])))), unsafe_allow_html=True)
 
@@ -8465,24 +8547,26 @@ def render_aditivos_contrato(resultado: Dict[str, Any]) -> None:
 def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e serviços identificados") -> None:
     itens = normalizar_itens_contrato(resultado.get("itens_contrato", []))
     st.markdown(f'<div class="section-title">{safe(titulo)}</div>', unsafe_allow_html=True)
+    metricas = resultado.get("metricas_tabela_comercial") if isinstance(resultado.get("metricas_tabela_comercial"), dict) else {}
+    if metricas:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(render_metric("Itens no documento", metricas.get("itens_encontrados_documento", len(itens))), unsafe_allow_html=True)
+        c2.markdown(render_metric("Itens exibidos", metricas.get("itens_exibidos_auditor", len(itens))), unsafe_allow_html=True)
+        c3.markdown(render_metric("Cobertura da tabela", f'{metricas.get("cobertura_tabela_percentual", 0)}%'), unsafe_allow_html=True)
+        c4.markdown(render_metric("Página(s) comercial(is)", metricas.get("paginas_tabela_comercial", "Não localizada")), unsafe_allow_html=True)
     if not itens:
         st.info("Nenhum material, serviço ou condição comercial unitária foi identificado no contrato/anexos.")
         return
 
     df_itens = pd.DataFrame(itens)
-
-    # Mostra colunas complementares somente quando houver informação real.
-    colunas_base = ["Item", "Descrição", "Tipo", "Natureza do valor", "Quantidade", "Unidade", "Valor unitário", "Valor total"]
-    colunas_opcionais = ["Periodicidade", "Taxa / Percentual", "Total de encargos", "Vencimento / Prazo", "Página", "Status de evidência", "Evidência"]
+    colunas_base = ["Item", "Grupo/Tabela", "Descrição", "Tipo", "Natureza do valor", "Faixa/Condição", "Quantidade", "Unidade", "Valor unitário", "Valor total"]
+    colunas_opcionais = ["Periodicidade", "Condição comercial", "Taxa / Percentual", "Total de encargos", "Vencimento / Prazo", "Página", "Status de evidência", "Evidência"]
     colunas_finais = [c for c in colunas_base if c in df_itens.columns]
-
     for col in colunas_opcionais:
         if col in df_itens.columns and df_itens[col].apply(_valor_informado).any():
             colunas_finais.append(col)
-
     if "Fonte" in df_itens.columns:
         colunas_finais.append("Fonte")
-
     df_itens = df_itens[colunas_finais]
 
     st.dataframe(
@@ -8490,7 +8574,10 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
         use_container_width=True,
         hide_index=True,
         column_config={
+            "Grupo/Tabela": st.column_config.TextColumn("Grupo/Tabela", width="medium"),
             "Descrição": st.column_config.TextColumn("Descrição", width="large"),
+            "Faixa/Condição": st.column_config.TextColumn("Faixa/Condição", width="medium"),
+            "Condição comercial": st.column_config.TextColumn("Condição comercial", width="large"),
             "Valor unitário": st.column_config.TextColumn("Valor unitário"),
             "Valor total": st.column_config.TextColumn("Valor total"),
             "Taxa / Percentual": st.column_config.TextColumn("Taxa / Percentual"),
@@ -8502,85 +8589,6 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
             "Natureza do valor": st.column_config.TextColumn("Natureza do valor", width="medium"),
         },
     )
-
-
-def render_contract_card(row: pd.Series) -> None:
-    """Renderiza o card do Dashboard sem HTML bruto.
-
-    A versão anterior montava um grande bloco HTML com link base64; em algumas
-    versões/temas do Streamlit isso aparecia como texto na tela. Aqui usamos
-    componentes nativos para garantir estabilidade visual.
-    """
-    risco = normalize_risco(row.get("risco"))
-    cor = risco_cor(risco)
-
-    contraparte = row.get("fornecedor") or row.get("contraparte") or "Não localizado"
-    cnpj = row.get("cnpj") or row.get("cnpj_contraparte") or "Não localizado"
-    valor = row.get("valor_total") or row.get("valor_contrato_original") or "Não localizado"
-    vigencia = row.get("vigencia") or row.get("vigencia_apos_assinatura") or "Não localizada"
-    status = row.get("status") or "Não localizado"
-    score = row.get("score") or "0"
-    assinado = row.get("contrato_assinado") or "Não informado"
-    origem = row.get("tipo_origem") or row.get("origem") or "Não informado"
-    modelo = row.get("modelo_ia") or "Não informado"
-    data = row.get("data_analise") or "Não informado"
-    arquivo = row.get("arquivo") or "Não informado"
-
-    with st.container(border=True):
-        topo_esq, topo_dir = st.columns([5, 1])
-
-        with topo_esq:
-            st.markdown("### 📄 Análise de Contrato")
-            st.caption(str(arquivo))
-
-        with topo_dir:
-            st.markdown(
-                f"""
-                <div style="text-align:center;background:{cor};color:white;
-                padding:10px 14px;border-radius:999px;font-weight:900;font-size:12px;">
-                    {safe(risco)}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        c1, c2, c3, c4 = st.columns([1.6, 1.1, 1.2, .7])
-        c1.markdown(f"**Contraparte**  \n{safe(contraparte)}", unsafe_allow_html=True)
-        c2.markdown(f"**CNPJ**  \n{safe(cnpj)}", unsafe_allow_html=True)
-        c3.markdown(f"**Valor do Contrato**  \n{safe(valor)}", unsafe_allow_html=True)
-        c4.markdown(f"**Score**  \n{safe(score)}", unsafe_allow_html=True)
-
-        c5, c6, c7, c8 = st.columns([1.6, 1.1, 1.2, .7])
-        c5.markdown(f"**Vigência**  \n{safe(vigencia)}", unsafe_allow_html=True)
-        c6.markdown(f"**Status**  \n{safe(status)}", unsafe_allow_html=True)
-        c7.markdown(f"**Origem**  \n{safe(origem)}", unsafe_allow_html=True)
-        c8.markdown(f"**Assinado**  \n{safe(assinado)}", unsafe_allow_html=True)
-
-        rodape_esq, rodape_dir = st.columns([4, 1])
-        rodape_esq.caption(f"Analisado em {data} • Modelo: {modelo}")
-
-        excel_bytes = gerar_excel_card_bytes(row)
-        rodape_dir.download_button(
-            "📥 Relatório Excel",
-            data=excel_bytes,
-            file_name=f"analise_contrato_{row.get('id', 'historico')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key=f"download_dashboard_{row.get('id', id(row))}",
-        )
-
-
-
-
-def _hist_parse_resultado_json(row: pd.Series) -> Dict[str, Any]:
-    raw = row.get("resultado_json") if "resultado_json" in row.index else None
-    if raw not in (None, "", "Não informado"):
-        try:
-            data = json.loads(raw)
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
-    return {}
 
 
 def _hist_texto_curto(valor: Any, limite: int = 190) -> str:
@@ -8815,11 +8823,7 @@ def render_analise_completa_historico(row: pd.Series) -> None:
     pill = "pill-ok" if risco == "BAIXO" else "pill-warn" if risco == "MÉDIO" else "pill-danger"
 
     st.markdown('<div class="section-title">Resumo da análise</div>', unsafe_allow_html=True)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.markdown(render_metric("Status", resultado.get("status")), unsafe_allow_html=True)
-    m2.markdown(render_metric("Risco", risco), unsafe_allow_html=True)
-    m3.markdown(render_metric("Score", resultado.get("score")), unsafe_allow_html=True)
-    m4.markdown(render_metric("Pendências", len(resultado.get("pendencias", []))), unsafe_allow_html=True)
+    render_indicadores_analise(resultado)
 
     if str(resultado.get("contrato_assinado", "")).upper() == "NÃO":
         st.error("⚠️ Contrato sem assinatura localizada. Revisar antes da criação da RC/PO.")
@@ -9617,6 +9621,24 @@ if pagina == "📄 Nova Análise":
                 # depois das regras legadas de compatibilidade.
                 resultado_bruto_ia = dict(resultado or {})
                 resultado_bruto_ia["texto_extraido"] = texto
+
+                # Extração determinística adicional: percorre todas as linhas das tabelas
+                # comerciais, inclusive faixas, isenções e valores textuais. O resultado
+                # é mesclado com a IA; nunca substitui uma tabela completa por um resumo.
+                itens_tabela_documento = extrair_tabela_comercial_completa(texto)
+                # O parser genérico só entra quando não existe tabela comercial estruturada;
+                # isso evita duplicar faixas e criar descrições truncadas pelo OCR.
+                itens_fallback_local = [] if itens_tabela_documento else extrair_itens_local(texto)
+                itens_completos = mesclar_itens_comerciais(
+                    resultado_bruto_ia.get("itens_contrato", []),
+                    itens_tabela_documento,
+                    itens_fallback_local,
+                )
+                resultado_bruto_ia["itens_contrato"] = normalizar_itens_contrato(itens_completos)
+                resultado_bruto_ia["metricas_tabela_comercial"] = calcular_metricas_tabela_comercial(
+                    itens_tabela_documento,
+                    resultado_bruto_ia["itens_contrato"],
+                )
                 resultado = normalizar(resultado_bruto_ia)
 
                 # Reforço final: para serviços percentuais, consolida taxa/encargos no serviço principal.
@@ -9625,6 +9647,8 @@ if pagina == "📄 Nova Análise":
                     resultado["itens_contrato"] = normalizar_itens_contrato(itens_percentuais)
                 elif not resultado.get("itens_contrato"):
                     resultado["itens_contrato"] = extrair_itens_local(texto)
+
+                resultado["metricas_tabela_comercial"] = resultado_bruto_ia.get("metricas_tabela_comercial", {})
 
                 # Regras legadas continuam sendo executadas para compatibilidade visual/histórico.
                 resultado = aplicar_regras_finais_contrato(resultado, texto)
@@ -9691,11 +9715,7 @@ if pagina == "📄 Nova Análise":
             risco = normalize_risco(resultado.get("risco"))
             pill = "pill-ok" if risco == "BAIXO" else "pill-warn" if risco == "MÉDIO" else "pill-danger"
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(render_metric("Status", resultado.get("status")), unsafe_allow_html=True)
-            c2.markdown(render_metric("Risco", risco), unsafe_allow_html=True)
-            c3.markdown(render_metric("Score", resultado.get("score")), unsafe_allow_html=True)
-            c4.markdown(render_metric("Pendências", len(resultado.get("pendencias", []))), unsafe_allow_html=True)
+            render_indicadores_analise(resultado)
 
             render_resumo_processamento_final(resultado)
 
