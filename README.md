@@ -2,7 +2,7 @@
 
 Aplicação Streamlit para análise profissional de contratos Projuris ou Ariba, com leitura de PDF/DOCX, Gemini Files API, histórico SQLite e exportação Excel.
 
-## Versão atual — Motor de Auditoria por Evidências V4
+## Versão atual — Motor de Auditoria por Evidências V5
 
 O fluxo atual possui três camadas:
 
@@ -18,10 +18,12 @@ Principais recursos:
 - separação entre valor global, implantação, mensalidade e tarifas variáveis;
 - cálculo de vigência somente com bases confirmadas;
 - assinatura física, DocuSign e reconhecimento de firma separados;
-- checklist, pendências, score, resumo e parecer baseados em evidências;
+- checklist, pendências, confiança da extração, risco, resumo e parecer baseados em evidências;
+- extração integral de tabelas comerciais, sem limitar ou resumir linhas;
+- indicadores de itens encontrados, itens exibidos e cobertura da tabela comercial;
 - histórico e Excel completos.
 
-Consulte `MOTOR_EVIDENCIAS_V4.md` para as regras e o passo a passo de teste.
+Consulte `MOTOR_EVIDENCIAS_V4.md` e `AJUSTES_V5_TABELA_COMPLETA.md` para as regras e o passo a passo de teste.
 
 ## Configuração local
 
