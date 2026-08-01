@@ -36,6 +36,12 @@ from docx import Document
 from dotenv import load_dotenv
 
 from database import criar_banco, salvar_analise, listar_analises, limpar_historico
+from auditor_evidencias import (
+    PROMPT_EVIDENCIAS_V4,
+    PROMPT_VERIFICADOR_V4,
+    aplicar_motor_evidencias_v4,
+    linhas_auditoria_para_tela,
+)
 
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
@@ -1302,7 +1308,12 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
             "valor_total", "valor total", "Valor Total (R$)", "total",
             "subtotal", "valor_total_rs", "preco_total", "preço_total"
         ]))
-        fonte = clean_text(pegar(item, ["fonte", "origem", "documento", "arquivo", "pagina", "página"], "Contrato/anexo"))
+        fonte = clean_text(pegar(item, ["fonte", "origem", "documento", "arquivo", "arquivo_fonte"], "Contrato/anexo"))
+        pagina = clean_text(pegar(item, ["pagina", "página", "page"], "Não localizado"))
+        evidencia = clean_text(pegar(item, ["evidencia", "evidência", "trecho_evidencia", "trecho de evidência"], "Não localizado"))
+        natureza_valor = clean_text(pegar(item, ["natureza_valor", "natureza do valor", "tipo_valor", "tipo de valor"], "Não localizado"))
+        periodicidade = clean_text(pegar(item, ["periodicidade", "recorrencia", "recorrência"], "Não localizado"))
+        status_evidencia = clean_text(pegar(item, ["status_evidencia", "status de evidência", "status"], "Não localizado"))
 
         # Não transforme taxa/encargos em valor unitário. Eles são condições comerciais.
         normalizados.append({
@@ -1316,7 +1327,12 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
             "Taxa / Percentual": taxa_percentual,
             "Total de encargos": total_encargos,
             "Vencimento / Prazo": vencimento,
+            "Natureza do valor": natureza_valor,
+            "Periodicidade": periodicidade,
             "Fonte": fonte,
+            "Página": pagina,
+            "Status de evidência": status_evidencia,
+            "Evidência": evidencia,
         })
 
     # Regra especial: se a IA devolveu uma linha "Taxa de Agenciamento" e outra "Encargos Sociais",
@@ -1331,6 +1347,8 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
         encargos = "Não localizado"
         vencimento = "Não localizado"
         fonte = "Contrato/anexo"
+        pagina = "Não localizado"
+        evidencias = []
         for item in normalizados:
             desc_low = str(item.get("Descrição", "")).lower()
             if not _valor_informado(taxa):
@@ -1347,6 +1365,10 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
                 vencimento = item.get("Vencimento / Prazo")
             if _valor_informado(item.get("Fonte")):
                 fonte = item.get("Fonte")
+            if _valor_informado(item.get("Página")):
+                pagina = item.get("Página")
+            if _valor_informado(item.get("Evidência")):
+                evidencias.append(clean_text(item.get("Evidência")))
 
         return [{
             "Item": "1",
@@ -1359,7 +1381,12 @@ def normalizar_itens_contrato(itens: Any) -> List[Dict[str, Any]]:
             "Taxa / Percentual": taxa,
             "Total de encargos": encargos,
             "Vencimento / Prazo": vencimento,
+            "Natureza do valor": "PERCENTUAL_VARIAVEL",
+            "Periodicidade": "Conforme demanda/folha",
             "Fonte": fonte,
+            "Página": pagina,
+            "Status de evidência": "CONFIRMADO" if evidencias else "NÃO_LOCALIZADO",
+            "Evidência": " | ".join(dict.fromkeys(evidencias)) if evidencias else "Não localizado",
         }]
 
     return normalizados
@@ -5437,6 +5464,8 @@ VALIDAÇÃO FINAL
 Antes de responder, confira campo por campo contra os documentos. Quando duas informações verdadeiras forem de categorias diferentes, mantenha-as separadas. Retorne APENAS o JSON completo.
 
 {base}
+
+{PROMPT_EVIDENCIAS_V4}
 """
 
 
@@ -5481,6 +5510,8 @@ TESTES OBRIGATÓRIOS
 
 JSON PRELIMINAR:
 {rascunho}
+
+{PROMPT_VERIFICADOR_V4}
 """
 
 
@@ -5533,9 +5564,9 @@ def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_origin
                             final["verificacao_documental"] = f"Primeira passagem utilizada; verificação adicional falhou: {erro_verificacao}"
 
                         final["modelo_ia"] = nome
-                        final["modo_analise_ia"] = "Documentos originais + validação documental em duas passagens"
+                        final["modo_analise_ia"] = "Documentos originais + validação em duas passagens + Motor de Evidências V4"
                         final["arquivos_originais_enviados"] = len(uploaded_files)
-                        st.success(f"IA utilizada: {nome} • documentos validados em duas passagens")
+                        st.success(f"IA utilizada: {nome} • documentos validados em duas passagens + Motor de Evidências V4")
                         return final
                     except Exception as e:
                         ultimo_erro_multimodal = e
@@ -5565,7 +5596,7 @@ def analisar_gemini(texto: str, api_key: str, opcao_modelo: str, arquivos_origin
         try:
             resultado_json = _gerar_texto_com_sdk_legado(texto, api_key, nome)
             resultado_json["modelo_ia"] = nome
-            resultado_json["modo_analise_ia"] = "Texto extraído com regras estritas de evidência"
+            resultado_json["modo_analise_ia"] = "Texto extraído + regras estritas + Motor de Evidências V4"
             if ultimo_erro_multimodal:
                 resultado_json["erro_upload_documentos_originais"] = str(ultimo_erro_multimodal)
                 st.warning("A Files API falhou; foi usado o texto extraído com trava antialucinação.")
@@ -6704,15 +6735,33 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
 
     cards_html = []
     textos_todos = []
+    mapa_evidencias = resultado.get("mapa_evidencias_cards") if isinstance(resultado.get("mapa_evidencias_cards"), dict) else {}
 
     for label, chave in CAMPOS_OFICIAIS:
         principal, detalhe, alerta = _montar_partes_card_valor(label, resultado.get(chave))
+        evidencia_card = mapa_evidencias.get(chave, {}) if isinstance(mapa_evidencias.get(chave, {}), dict) else {}
+        fonte = clean_text(evidencia_card.get("arquivo"))
+        pagina = clean_text(evidencia_card.get("pagina"))
+        secao = clean_text(evidencia_card.get("secao"))
+        status_ev = clean_text(evidencia_card.get("status"))
+        confianca_ev = evidencia_card.get("confianca", 0)
+        referencia = " • ".join([x for x in [fonte, pagina, secao] if _valor_informado(x)])
+
         texto_copiar = _texto_copiavel_card(label, principal, detalhe, alerta)
+        if referencia:
+            texto_copiar += f"\nFonte: {referencia}\nEvidência: {status_ev} • Confiança: {confianca_ev}%"
         textos_todos.append(texto_copiar)
 
         detalhe_html = ""
         if detalhe and clean_text(detalhe) not in ("", "Não localizado", "Não localizada", "N/A", "None"):
             detalhe_html = f'<div class="valor-detalhe">{safe(detalhe)}</div>'
+
+        fonte_html = ""
+        if referencia:
+            fonte_html = (
+                f'<div class="valor-fonte"><b>Fonte:</b> {safe(referencia)}<br>'
+                f'<b>Status:</b> {safe(status_ev)} • <b>Confiança:</b> {safe(confianca_ev)}%</div>'
+            )
 
         cards_html.append(
             '<div class="valor-card">'
@@ -6721,6 +6770,7 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
             f'<div class="valor-principal">{safe(principal)}</div>'
             f'{detalhe_html}'
             f'<div class="valor-alerta">{safe(alerta)}</div>'
+            f'{fonte_html}'
             '</div>'
         )
 
@@ -6864,6 +6914,17 @@ def render_info_grid_com_copy(resultado: Dict[str, Any]) -> None:
         font-size:11px;
         font-weight:950;
     }}
+    .valor-fonte{{
+        margin-top:12px;
+        padding-top:10px;
+        border-top:1px dashed rgba(215,191,117,.22);
+        color:#94a3b8;
+        font-size:10px;
+        line-height:1.45;
+        font-weight:700;
+        overflow-wrap:anywhere;
+    }}
+    .valor-fonte b{{color:#f3e6b3;}}
     .copy-toast{{
         position:fixed;
         right:14px;
@@ -7093,6 +7154,7 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
                     or "Não aplicável"
                 ),
                 "Fonte": clean_text(item.get("fonte") or item.get("Fonte") or fonte_padrao),
+                "Página": clean_text(item.get("pagina") or item.get("Página") or "Não localizado"),
                 "Status": clean_text(item.get("status") or item.get("Status") or status_padrao),
                 "Evidência": clean_text(item.get("evidencia") or item.get("evidência") or item.get("Evidência") or evidencia_padrao),
             })
@@ -7106,6 +7168,7 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
                 "Data da assinatura": data_padrao or "Não localizado",
                 "Data do reconhecimento de firma": clean_text(resultado.get("data_reconhecimento_firma") or "Não aplicável"),
                 "Fonte": fonte_padrao,
+                "Página": "Não localizado",
                 "Status": status_padrao,
                 "Evidência": evidencia_padrao,
             })
@@ -7118,6 +7181,7 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
             "Data da assinatura": data_padrao or "Não localizado",
             "Data do reconhecimento de firma": clean_text(resultado.get("data_reconhecimento_firma") or "Não aplicável"),
             "Fonte": fonte_padrao,
+            "Página": "Não localizado",
             "Status": status_padrao,
             "Evidência": evidencia_padrao if _valor_informado(evidencia_padrao) else "Nenhum signatário localizado nos documentos analisados.",
         })
@@ -7146,6 +7210,39 @@ def render_assinaturas_contrato(resultado: Dict[str, Any]) -> None:
     )
     st.dataframe(df_ass, use_container_width=True, hide_index=True)
 
+def render_auditoria_evidencias(resultado: Dict[str, Any]) -> None:
+    """Exibe a matriz que sustenta cada card, cálculo e conclusão."""
+    st.markdown('<div class="section-title">Auditoria de evidências</div>', unsafe_allow_html=True)
+    metricas = resultado.get("metricas_confianca") if isinstance(resultado.get("metricas_confianca"), dict) else {}
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(render_metric("Cobertura dos campos", f"{metricas.get('cobertura_campos_percentual', 0)}%"), unsafe_allow_html=True)
+    c2.markdown(render_metric("Cobertura das páginas", f"{metricas.get('cobertura_paginas_percentual', 0)}%"), unsafe_allow_html=True)
+    c3.markdown(render_metric("Campos não localizados", metricas.get("campos_nao_localizados", len(resultado.get("campos_nao_localizados", [])))), unsafe_allow_html=True)
+    c4.markdown(render_metric("Conflitos", metricas.get("conflitos", len(resultado.get("conflitos_documentais", [])))), unsafe_allow_html=True)
+
+    st.caption("Todo dado confirmado deve possuir arquivo, página ou seção, trecho de evidência e nível de confiança. Cálculos são identificados separadamente.")
+    linhas = linhas_auditoria_para_tela(resultado)
+    if linhas:
+        df = pd.DataFrame(linhas)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Valor consolidado": st.column_config.TextColumn("Valor consolidado", width="large"),
+                "Evidência": st.column_config.TextColumn("Evidência", width="large"),
+                "Confiança": st.column_config.ProgressColumn("Confiança", min_value=0, max_value=100),
+            },
+        )
+    else:
+        st.info("Esta análise não possui matriz de evidências. Registros antigos permanecem em modo de compatibilidade.")
+
+    conflitos = resultado.get("conflitos_documentais") if isinstance(resultado.get("conflitos_documentais"), list) else []
+    if conflitos:
+        st.markdown('<div class="section-title">Conflitos documentais</div>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame(conflitos), use_container_width=True, hide_index=True)
+
+
 def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = "", key_prefix: str = "resultado") -> None:
     """Organiza o resultado completo em abas por seção da análise.
 
@@ -7158,6 +7255,7 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
     - Checklist de validação
     - Pendências
     - Parecer automático
+    - Auditoria de evidências
     - Texto extraído
     - Triagem dos anexos
     """
@@ -7170,6 +7268,7 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
         tab_checklist,
         tab_pendencias,
         tab_parecer,
+        tab_evidencias,
         tab_texto,
         tab_triagem,
     ) = st.tabs([
@@ -7181,6 +7280,7 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
         "✅ Checklist",
         "⚠️ Pendências",
         "📝 Parecer",
+        "🔎 Evidências",
         "📄 Texto extraído",
         "📎 Triagem dos anexos",
     ])
@@ -7214,6 +7314,9 @@ def render_resultado_em_abas(resultado: Dict[str, Any], texto_extraido: str = ""
 
     with tab_parecer:
         render_parecer_automatico(resultado)
+
+    with tab_evidencias:
+        render_auditoria_evidencias(resultado)
 
     with tab_texto:
         render_texto_extraido_aba(resultado, texto_extraido, key_prefix=key_prefix)
@@ -8021,6 +8124,15 @@ def _finalizar_coerencia_pos_processamento(
         base = _recalcular_risco_por_evidencias(base)
         base = _reconstruir_resumo_e_parecer(base)
 
+    # Motor V4: última consolidação determinística. Cards, valores, vigência,
+    # assinaturas, checklist, pendências, score e parecer passam a usar apenas
+    # fatos sustentados pela matriz de evidências.
+    base = aplicar_motor_evidencias_v4(
+        base,
+        resultado_bruto,
+        clean_text(base.get("texto_extraido")),
+    )
+
     base["triagem_anexos"] = _sincronizar_triagem_com_resultado(triagem, base)
     return base
 
@@ -8360,8 +8472,8 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
     df_itens = pd.DataFrame(itens)
 
     # Mostra colunas complementares somente quando houver informação real.
-    colunas_base = ["Item", "Descrição", "Tipo", "Quantidade", "Unidade", "Valor unitário", "Valor total"]
-    colunas_opcionais = ["Taxa / Percentual", "Total de encargos", "Vencimento / Prazo"]
+    colunas_base = ["Item", "Descrição", "Tipo", "Natureza do valor", "Quantidade", "Unidade", "Valor unitário", "Valor total"]
+    colunas_opcionais = ["Periodicidade", "Taxa / Percentual", "Total de encargos", "Vencimento / Prazo", "Página", "Status de evidência", "Evidência"]
     colunas_finais = [c for c in colunas_base if c in df_itens.columns]
 
     for col in colunas_opcionais:
@@ -8385,6 +8497,9 @@ def render_itens_contrato(resultado: Dict[str, Any], titulo: str = "Materiais e 
             "Total de encargos": st.column_config.TextColumn("Total de encargos"),
             "Vencimento / Prazo": st.column_config.TextColumn("Vencimento / Prazo", width="medium"),
             "Fonte": st.column_config.TextColumn("Fonte", width="medium"),
+            "Página": st.column_config.TextColumn("Página", width="small"),
+            "Evidência": st.column_config.TextColumn("Evidência", width="large"),
+            "Natureza do valor": st.column_config.TextColumn("Natureza do valor", width="medium"),
         },
     )
 

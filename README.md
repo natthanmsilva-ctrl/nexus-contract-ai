@@ -1,15 +1,40 @@
 # Auditor de Contratos - Grupo SBF
 
-Versão com correção final da pré-triagem, histórico completo e Excel.
+Aplicação Streamlit para análise profissional de contratos Projuris ou Ariba, com leitura de PDF/DOCX, Gemini Files API, histórico SQLite e exportação Excel.
 
-Ajustes desta entrega:
-- Apresentação duplicada sem assinatura vai para IGNORADO quando existir versão assinada equivalente.
-- Histórico renderiza Aditivos identificados e Materiais/Serviços identificados.
-- Excel individual mantém abas de Aditivos, Itens dos Aditivos, Itens do Contrato e Triagem dos Anexos.
-- Excel do histórico filtrado inclui campos de triagem, quantidade de aditivos e quantidade de itens/serviços.
+## Versão atual — Motor de Auditoria por Evidências V4
 
-Configuração:
-- Defina GEMINI_API_KEY no .env local ou nos Secrets da publicação.
+O fluxo atual possui três camadas:
 
+1. Extração completa dos documentos originais pelo Gemini.
+2. Segunda revisão independente do JSON contra os arquivos.
+3. Consolidação determinística em Python, impedindo que cards, valores, assinaturas e parecer sejam confirmados sem evidência.
 
-Observação técnica: este pacote inclui `google-genai>=1.0.0` para permitir análise dos documentos originais pela Files API do Gemini.
+Principais recursos:
+
+- matriz de evidências por campo;
+- fonte, página/seção, trecho e confiança em cada card;
+- nova aba de auditoria de evidências;
+- separação entre valor global, implantação, mensalidade e tarifas variáveis;
+- cálculo de vigência somente com bases confirmadas;
+- assinatura física, DocuSign e reconhecimento de firma separados;
+- checklist, pendências, score, resumo e parecer baseados em evidências;
+- histórico e Excel completos.
+
+Consulte `MOTOR_EVIDENCIAS_V4.md` para as regras e o passo a passo de teste.
+
+## Configuração local
+
+Crie um arquivo `.env` apenas na sua máquina:
+
+```env
+GEMINI_API_KEY=SUA_CHAVE_AQUI
+```
+
+No Streamlit Community Cloud, configure a chave em **App settings > Secrets**:
+
+```toml
+GEMINI_API_KEY = "SUA_CHAVE_AQUI"
+```
+
+Nunca envie `.env`, banco local, `.venv` ou arquivos com segredos ao GitHub.
