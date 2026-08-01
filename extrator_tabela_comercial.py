@@ -92,16 +92,32 @@ def _normalizar_valor_ocr(valor: str) -> str:
 
 
 def _extrair_valor_final(linha: str) -> Tuple[str, str] | None:
-    """Separa descrição e condição/valor no final da linha."""
-    linha = _texto(linha).strip("| ")
-    # Condições textuais também são linhas comerciais válidas.
-    m_txt = re.match(r"^(.*?)(?:\s+)(isento|isenta|taxa\s+correio|tarifa\s+oficial\s+dos\s+correios)\s*$", linha, flags=re.I)
-    if m_txt and len(_texto(m_txt.group(1))) >= 3:
-        return _texto(m_txt.group(1)), _texto(m_txt.group(2))
+    """Separa descrição e condição/valor, tolerando pequenos ruídos de OCR.
 
-    m = re.match(r"^(.*?)(?:\s+)(R\s*\$|RS)\s*([0-9][0-9.,]*)(?:\s*[|+\-=]+)*\s*$", linha, flags=re.I)
+    Tabelas escaneadas frequentemente acrescentam caracteres soltos depois do
+    valor (por exemplo ``R$0,60 5`` ou ``R$ 0,65 |``). Esses caracteres não
+    fazem parte do preço e não podem provocar a perda da linha comercial.
+    """
+    linha = _texto(linha).strip("| ")
+
+    # Condições textuais também são linhas comerciais válidas.
+    m_txt = re.match(
+        r"^(.*?)(?:\s+)(isento|isenta|taxa\s+correio|tarifa\s+oficial\s+dos\s+correios)\s*$",
+        linha,
+        flags=re.I,
+    )
+    if m_txt and len(_texto(m_txt.group(1))) >= 3:
+        return _texto(m_txt.group(1)).rstrip(" *"), _texto(m_txt.group(2))
+
+    # Aceita até três resíduos curtos após o valor. Não aceita palavras, para
+    # evitar interpretar como preço uma linha narrativa comum do contrato.
+    m = re.match(
+        r"^(.*?)(?:\s+)(R\s*\$|RS)\s*([0-9][0-9.,]*)(?:\s+(?:[|+\-=]+|[0-9]{1,2})){0,3}\s*$",
+        linha,
+        flags=re.I,
+    )
     if m and len(_texto(m.group(1))) >= 3:
-        return _texto(m.group(1)), _normalizar_valor_ocr("R$ " + m.group(3))
+        return _texto(m.group(1)).rstrip(" *"), _normalizar_valor_ocr("R$ " + m.group(3))
     return None
 
 
@@ -254,19 +270,147 @@ def extrair_tabela_comercial_completa(texto: str) -> List[Dict[str, Any]]:
     return itens
 
 
-def _chave_item(item: Mapping[str, Any]) -> Tuple[str, str, str]:
-    desc = item.get("Descrição") or item.get("descricao") or item.get("Item") or item.get("item")
-    valor = item.get("Valor unitário") or item.get("valor_unitario") or item.get("Taxa / Percentual") or item.get("taxa_percentual")
-    natureza = item.get("Natureza do valor") or item.get("natureza_valor") or ""
-    # Grupo/Tabela é metadado de exibição, não parte da identidade. Assim a linha
-    # resumida pela IA é substituída/complementada pela linha documentada local.
-    return _token(desc), _token(valor), _token(natureza)
+def _campo_item(item: Mapping[str, Any], *nomes: str) -> Any:
+    """Lê um campo independentemente de caixa, acento ou estilo de chave."""
+    mapa = {
+        re.sub(r"[^A-Z0-9]+", "_", _sem_acento(k).upper()).strip("_"): v
+        for k, v in item.items()
+    }
+    for nome in nomes:
+        chave = re.sub(r"[^A-Z0-9]+", "_", _sem_acento(nome).upper()).strip("_")
+        if chave in mapa:
+            return mapa[chave]
+    return None
+
+
+def _numero_identidade(valor: Any) -> str:
+    """Normaliza 3000.0 e R$ 3.000,00 para a mesma identidade."""
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        numero = float(valor)
+        return (f"{numero:.6f}").rstrip("0").rstrip(".")
+    txt = _texto(valor)
+    if not txt:
+        return ""
+    token = _token(txt)
+    if "CORREIO" in token:
+        return "TARIFA_CORREIOS"
+    if token in {"ISENTO", "ISENTA"}:
+        return "0"
+    m = re.search(r"-?[0-9][0-9.]*([,][0-9]+|[.][0-9]+)?", txt)
+    if not m:
+        return token
+    numero_txt = m.group(0)
+    if "," in numero_txt:
+        numero_txt = numero_txt.replace(".", "").replace(",", ".")
+    elif numero_txt.count(".") > 1:
+        numero_txt = numero_txt.replace(".", "")
+    try:
+        numero = float(numero_txt)
+        return (f"{numero:.6f}").rstrip("0").rstrip(".")
+    except ValueError:
+        return token
+
+
+def _numeros_descricao(descricao: str) -> List[int]:
+    valores: List[int] = []
+    for numero in re.findall(r"\d[\d.]*", descricao):
+        try:
+            valores.append(int(numero.replace(".", "")))
+        except ValueError:
+            continue
+    return valores
+
+
+def _assinatura_semantica(item: Mapping[str, Any]) -> Tuple[str, ...]:
+    """Cria uma identidade comercial estável para reconciliar IA e OCR.
+
+    A IA costuma ampliar a descrição (``Tarifa mensal por acionista...``),
+    enquanto o OCR preserva apenas a célula da tabela (``Até 5.000 acionistas``).
+    Esta assinatura reconhece que ambos representam a mesma linha.
+    """
+    descricao = _texto(_campo_item(item, "Descrição", "descricao", "Item", "item"))
+    low = _sem_acento(descricao).lower()
+    natureza = _token(_campo_item(item, "Natureza do valor", "natureza_valor"))
+    valor = _numero_identidade(
+        _campo_item(item, "Valor unitário", "valor_unitario", "Taxa / Percentual", "taxa_percentual")
+    )
+
+    if "implantacao" in low or "taxa unica" in low or "setup" in low:
+        return ("IMPLANTACAO", valor)
+    if "voto" in low and "distancia" in low:
+        return ("VOTO_DISTANCIA",)
+    if "mensalidade" in low or "custo fixo mensal" in low or (natureza == "MENSAL FIXO" and "acionista" not in low):
+        return ("MENSAL_FIXO", valor)
+    if "movimentacao" in low and "bolsa" in low:
+        return ("MOVIMENTACAO_BOLSA",)
+
+    if "acionista" in low and ("ate" in low or "acima" in low or "faixa" in low or re.search(r"\bde\s+\d", low)):
+        numeros = _numeros_descricao(low)
+        if "acima" in low and numeros:
+            return ("FAIXA_ACIONISTA", "ACIMA", str(numeros[0]))
+        if "ate" in low and numeros:
+            return ("FAIXA_ACIONISTA", "ATE", str(numeros[-1]))
+        if len(numeros) >= 2:
+            return ("FAIXA_ACIONISTA", "DE", str(numeros[-2]), str(numeros[-1]))
+
+    if "dividendo" in low:
+        if "outros bancos" in low or "outro banco" in low:
+            return ("DIVIDENDOS_OUTROS_BANCOS",)
+        if "itau" in low:
+            return ("DIVIDENDOS_ITAU",)
+    if "bonificacao" in low or "desdobramento" in low:
+        return ("BONIFICACAO_DESDOBRAMENTO",)
+    if "transferencia" in low and ("cadastral" in low or "movimentacao" in low):
+        return ("TRANSFERENCIA_CADASTRAL",)
+    # A IA pode devolver a mesma linha em forma verbal ou nominal:
+    # "boletim emitido" == "emissão de boletim" e
+    # "boletim efetivado" == "efetivação de boletim".
+    # A assinatura semântica precisa reconhecer ambos para não duplicar a tabela.
+    if "boletim" in low and (re.search(r"\bemit", low) or re.search(r"\bemiss", low)):
+        return ("BOLETIM_EMITIDO",)
+    if "boletim" in low and re.search(r"\befetiv", low):
+        return ("BOLETIM_EFETIVADO",)
+    if ("aviso" in low or "avisos" in low) and ("extrato" in low or "extratos" in low):
+        return ("AVISOS_EXTRATOS",)
+    if "informe" in low and "rendimento" in low and "digita" in low:
+        return ("INFORMES_RENDIMENTOS_DIGITAL",)
+    if "correspondencia" in low:
+        return ("CORRESPONDENCIA",)
+
+    return ("LITERAL", _token(descricao), valor, natureza)
+
+
+def _chave_campo(campo: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", _sem_acento(campo).upper()).strip("_")
+
+
+def _mesclar_campos_sem_sobrescrever_alias(destino: Dict[str, Any], origem: Mapping[str, Any]) -> None:
+    """Preenche lacunas sem criar aliases que substituam o dado documental."""
+    existentes = {_chave_campo(k): k for k in destino}
+    for campo, valor in origem.items():
+        chave = _chave_campo(campo)
+        if chave in existentes:
+            # A primeira lista é prioritária. Mesmo "Não localizado" pode ser
+            # uma decisão documental intencional (ex.: valor total de uma
+            # mensalidade não deve receber o valor unitário devolvido pela IA).
+            continue
+        if _valor_util(valor):
+            destino[campo] = valor
+            existentes[chave] = campo
+
+
+def _chave_item(item: Mapping[str, Any]) -> Tuple[str, ...]:
+    return _assinatura_semantica(item)
 
 
 def mesclar_itens_comerciais(*listas: Any) -> List[Dict[str, Any]]:
-    """Une IA + parser local, sem limite e sem perder linhas textuais."""
+    """Reconcilia parser documental + IA sem duplicar a tabela comercial.
+
+    A ordem importa: a primeira lista é a fonte prioritária. No fluxo principal,
+    o parser determinístico deve vir primeiro e a IA serve para completar lacunas.
+    """
     saida: List[Dict[str, Any]] = []
-    pos: Dict[Tuple[str, str, str], int] = {}
+    pos: Dict[Tuple[str, ...], int] = {}
     for lista in listas:
         if not isinstance(lista, list):
             continue
@@ -274,25 +418,22 @@ def mesclar_itens_comerciais(*listas: Any) -> List[Dict[str, Any]]:
             if not isinstance(item, Mapping):
                 continue
             chave = _chave_item(item)
-            if not chave[0]:
+            if not chave or not chave[0]:
                 continue
             if chave in pos:
-                atual = saida[pos[chave]]
-                # O item com evidência/página mais completa prevalece, sem apagar dados úteis.
-                for k, v in item.items():
-                    if _valor_util(v) and not _valor_util(atual.get(k)):
-                        atual[k] = v
+                _mesclar_campos_sem_sobrescrever_alias(saida[pos[chave]], item)
                 continue
             pos[chave] = len(saida)
             saida.append(dict(item))
+
     # Renumeração estável para tela/Excel.
     for idx, item in enumerate(saida, 1):
-        if "Item" in item:
-            item["Item"] = str(idx)
+        campo_item = next((k for k in item if _chave_campo(k) in {"ITEM", "NUMERO", "N"}), None)
+        if campo_item:
+            item[campo_item] = str(idx)
         else:
             item["item"] = str(idx)
     return saida
-
 
 def calcular_metricas_tabela_comercial(itens_documento: Any, itens_exibidos: Any) -> Dict[str, Any]:
     doc = [i for i in (itens_documento or []) if isinstance(i, Mapping)]
@@ -310,7 +451,9 @@ def calcular_metricas_tabela_comercial(itens_documento: Any, itens_exibidos: Any
             grupos.append(g)
     return {
         "itens_encontrados_documento": encontrados,
-        "itens_exibidos_auditor": len(ch_exib),
+        "itens_exibidos_auditor": len(exib),
+        "itens_exibidos_unicos": len(ch_exib),
+        "divergencia_quantidade": len(exib) - encontrados,
         "itens_documentais_cobertos": cobertos,
         "cobertura_tabela_percentual": cobertura,
         "paginas_tabela_comercial": ", ".join(paginas) if paginas else "Não localizado",

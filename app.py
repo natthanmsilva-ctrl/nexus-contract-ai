@@ -251,10 +251,12 @@ section[data-testid="stSidebar"] *{
 .metric-card h2{
     color:#fff;
     margin:13px 0 0;
-    font-size:34px;
-    line-height:1.05;
+    font-size:clamp(26px,2.2vw,34px);
+    line-height:1.08;
     font-weight:900;
-    word-break:break-word;
+    word-break:normal;
+    overflow-wrap:break-word;
+    hyphens:none;
 }
 
 .metric-link{
@@ -3006,18 +3008,19 @@ def local_extract(texto: str) -> Dict[str, Any]:
         vigencia = "Prazo indeterminado"
 
     condicao_pagamento = "Não localizada"
+    # Procura prazo somente em contexto de pagamento. Isso evita capturar aviso
+    # prévio, prazo de cura, vigência ou qualquer outro número de dias do contrato.
     pagamento_patterns = [
-        r"prazo de\s*(\d{1,3})\s*\(?\w*\)?\s*dias",
-        r"em até\s*(\d{1,3})\s*\(?\w*\)?\s*dias",
-        r"(\d{1,3})\s*\(?\w*\)?\s*dias",
-        r"(\d{1,3})\s*dd",
-        r"(\d{1,3})\s*d\.?d\.?”?",
+        r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})(?:\s*\([^)]*\))?\s+do\s+m[eê]s\s+subsequente",
+        r"(?:pagamento|vencimento|fatura|nota\s+fiscal).{0,160}?(?:em\s+at[eé]|no\s+prazo\s+de|prazo\s+de|at[eé])\s+(\d{1,3})(?:\s*\([^)]*\))?\s+dias?",
+        r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?\s*(?:corridos|[uú]teis)?.{0,120}?(?:emiss[aã]o|fatura|nota\s+fiscal|recebimento|aprova[cç][aã]o)",
+        r"(?:pagamento|vencimento|fatura|nota\s+fiscal).{0,120}?(\d{1,3})\s*dd",
     ]
 
     for pattern in pagamento_patterns:
-        match = re.search(pattern, low, re.IGNORECASE)
+        match = re.search(pattern, texto, re.IGNORECASE | re.DOTALL)
         if match:
-            condicao_pagamento = f"{match.group(1)}DD"
+            condicao_pagamento = f"{int(match.group(1))}DD"
             break
 
     if condicao_pagamento == "Não localizada" and any(t in low for t in ["pagamento", "nota fiscal", "fatura", "mensalidade", "vencimento"]):
@@ -3211,7 +3214,7 @@ Quando o pacote contiver Lei 6.019/1974, mão de obra temporária, Atração & R
 - objetivo deve mencionar substituição transitória de pessoal permanente e/ou demanda complementar de serviços quando constar.
 - descricao_servico_material deve citar alocação de mão de obra temporária, recrutamento, seleção, contratação, gestão de folha/encargos quando constar.
 - forma_pagamento deve citar emissão de nota fiscal e aprovação formal da contratante quando constar.
-- condicao_pagamento_dias deve buscar na proposta frases como "60 dias corridos a contar da data de emissão".
+- condicao_pagamento_dias deve buscar frases como "60 dias corridos a contar da data de emissão" e retornar somente "60DD".
 - itens_contrato deve trazer condições comerciais da proposta: 40% + tributos de NF 0,8367 para vagas administrativas/operacionais/comerciais; 50% + tributos de NF 0,8367 para vagas técnicas/estratégicas/liderança; DISC/R$ 180,00 + tributos quando constar.
 - valor_contrato_original deve ficar "Sem valor global fixo" quando não houver valor total fechado, mesmo havendo taxas percentuais.
 - valor_mensal_estimado e valor_total_estimado_vigencia devem explicar que dependem de demanda, quantidade, salário/remuneração e fechamento de vaga, quando essa for a natureza comercial.
@@ -3336,7 +3339,7 @@ REGRAS DE EXTRAÇÃO OBRIGATÓRIAS
 5. objetivo deve responder "para quê é o contrato" em uma frase curta.
 6. descricao_servico_material deve descrever o serviço/material contratado, não histórico societário, alteração cadastral ou qualificação da empresa.
 7. descricao_breve_cadastro deve ser curta e própria para cadastro de material/serviço. Exemplo: "Fornecimento e instalação de baterias para nobreaks".
-8. condicao_pagamento_dias deve retornar em formato claro, exemplo: "90 dias". Não retorne apenas número solto.
+8. condicao_pagamento_dias deve retornar somente no padrão executivo DD, exemplo: "90DD", "60DD", "30DD" ou "15DD", conforme o contrato. Não retorne frase longa nesse campo; a explicação completa deve permanecer em forma_pagamento.
 9. forma_pagamento deve informar a forma descrita no contrato, exemplo: "Mediante emissão de nota fiscal".
 10. valor_contrato_original deve ser preenchido SOMENTE quando houver valor global fechado expressamente definido para todo o contrato. Não use valor unitário, valor por pessoa, valor por item, valor mensal, taxa, consumo estimado ou valor por demanda como valor original do contrato. Se não houver valor global fixo, retorne: "Sem valor global fixo definido no contrato. O documento apresenta valores unitários, mensais ou por demanda, mas não informa um valor total fechado para todo o contrato."
 11. valor_mensal_estimado deve explicar se o valor mensal é fixo ou variável. Se houver valor por unidade/pessoa/aprendiz/item/serviço, explique que o valor mensal depende da quantidade contratada ou utilizada. Exemplo: "R$ 282,42 por aprendiz ativo/mês. O valor mensal não é fixo; varia conforme a quantidade de aprendizes ativos no período."
@@ -3387,7 +3390,7 @@ EXEMPLOS DE NÍVEL DE DETALHE ESPERADO
 - objetivo: "Contratação para substituição das baterias dos nobreaks instalados na unidade da Centauro."
 - descricao_servico_material: "Fornecimento, instalação e testes de baterias para nobreaks, incluindo recolhimento das baterias antigas quando previsto."
 - forma_pagamento: "Pagamento mediante emissão de nota fiscal após conclusão/aceite dos serviços pela contratante."
-- condicao_pagamento_dias: "90 dias após aprovação da nota fiscal."
+- condicao_pagamento_dias: "90DD"
 - multa: "Multa de 2% sobre valores em atraso, acrescida de juros de 1% ao mês, se previsto."
 - rescisao_indenizacao: "Rescisão mediante aviso prévio de 30 dias, sem ônus ou multa, conforme previsto no contrato."
 - anticorrupcao: "Há cláusula de anticorrupção exigindo conduta ética e conformidade com a Lei 12.846/13."
@@ -4447,7 +4450,7 @@ def _aplicar_regras_mao_obra_temporaria(base: Dict[str, Any], texto: str) -> Dic
         flags=re.IGNORECASE,
     )
     if m_venc:
-        base["condicao_pagamento_dias"] = f"{m_venc.group(1)} dias corridos a contar da data de emissão da nota fiscal."
+        base["condicao_pagamento_dias"] = f"{int(m_venc.group(1))}DD"
     elif "aprovação formal da contratante" in low or "aprovacao formal da contratante" in low:
         base["condicao_pagamento_dias"] = "Conforme condições da proposta comercial aprovada, mediante aprovação formal da Contratante."
 
@@ -4583,10 +4586,14 @@ def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
     base["cnpj_contraparte"] = formatar_cnpj(base.get("cnpj_contraparte"))
     base["cnpj"] = formatar_cnpj(base.get("cnpj") or base.get("cnpj_contraparte"))
 
-    # Se a IA devolver somente número no pagamento, transforma em "X dias".
+    # Padroniza o card executivo da condição de pagamento em DD.
+    # Exemplos: 15DD, 30DD, 60DD.
     pag = clean_text(base.get("condicao_pagamento_dias"))
-    if re.fullmatch(r"\d{1,3}", pag):
-        base["condicao_pagamento_dias"] = f"{pag} dias"
+    m_pag_dd = re.search(r"\b(\d{1,3})\s*(?:d\.?d\.?|dias?)\b", pag, flags=re.IGNORECASE)
+    if not m_pag_dd:
+        m_pag_dd = re.search(r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})", pag, flags=re.IGNORECASE)
+    if m_pag_dd:
+        base["condicao_pagamento_dias"] = f"{int(m_pag_dd.group(1))}DD"
 
     # Mantém os cards com resumo executivo: detalhado o suficiente, sem virar cláusula inteira.
     limites = {
@@ -4857,14 +4864,30 @@ def _encontrar_item_auditoria(mapa: Dict[str, Dict[str, Any]], campo: str) -> Di
 def _classificar_item_financeiro(item: Dict[str, Any]) -> str:
     desc = clean_text(item.get("Descrição") or item.get("descricao")).lower()
     unidade = clean_text(item.get("Unidade") or item.get("unidade")).lower()
+    natureza = clean_text(item.get("Natureza do valor") or item.get("natureza_valor")).upper()
+    evidencia = clean_text(item.get("Evidência") or item.get("evidencia")).lower()
     texto = f"{desc} {unidade}"
+
+    # A natureza consolidada pelo parser documental prevalece sobre heurísticas
+    # de palavras. Isso evita classificar serviços isentos como tarifas pagas.
+    if "ISENTO" in natureza or "isento" in evidencia or "isenta" in evidencia:
+        return "ISENTO"
+    if natureza == "IMPLANTACAO_UNICA":
+        return "PONTUAL"
+    if natureza == "MENSAL_FIXO":
+        return "FIXO_MENSAL"
+    if natureza == "PERCENTUAL_VARIAVEL":
+        return "PERCENTUAL_VARIAVEL"
+    if natureza in ("UNITARIO_VARIAVEL", "REEMBOLSO"):
+        return "UNITARIO_VARIAVEL"
+
     if any(t in texto for t in ["implantação", "implantacao", "setup", "taxa única", "taxa unica", "adesão", "adesao"]):
         return "PONTUAL"
     if any(t in texto for t in ["custo fixo mensal", "mensalidade", "remuneração mensal", "remuneracao mensal", "fixo mensal"]):
         return "FIXO_MENSAL"
     if unidade in ("mês", "mes", "mensal") and not any(t in texto for t in ["acionista", "operação", "operacao", "unidade"]):
         return "FIXO_MENSAL"
-    if any(t in texto for t in ["acionista", "operação", "operacao", "por item", "por usuário", "por usuario", "por refeição", "por refeicao", "por vaga", "por trabalhador"]):
+    if any(t in texto for t in ["acionista", "operação", "operacao", "por item", "por usuário", "por usuario", "por refeição", "por refeicao", "por vaga", "por trabalhador", "correspondência", "correspondencia"]):
         return "UNITARIO_VARIAVEL"
     if _valor_informado(item.get("Taxa / Percentual")):
         return "PERCENTUAL_VARIAVEL"
@@ -4924,6 +4947,7 @@ def _aplicar_financeiro_confiavel(base: Dict[str, Any], resultado_bruto: Dict[st
         mensal_num, item_mensal = _primeiro_valor_item(itens, "FIXO_MENSAL")
 
     tarifas = [i for i in itens if _classificar_item_financeiro(i) in ("UNITARIO_VARIAVEL", "PERCENTUAL_VARIAVEL")]
+    isentos = [i for i in itens if _classificar_item_financeiro(i) == "ISENTO"]
     pontuais = [i for i in itens if _classificar_item_financeiro(i) == "PONTUAL"]
 
     if global_num is not None:
@@ -4974,29 +4998,37 @@ def _aplicar_financeiro_confiavel(base: Dict[str, Any], resultado_bruto: Dict[st
     outros_explicitos = []
     for item in itens:
         classificacao = _classificar_item_financeiro(item)
-        if classificacao in ("PONTUAL", "FIXO_MENSAL", "UNITARIO_VARIAVEL", "PERCENTUAL_VARIAVEL"):
+        if classificacao in ("PONTUAL", "FIXO_MENSAL", "UNITARIO_VARIAVEL", "PERCENTUAL_VARIAVEL", "ISENTO"):
             continue
         numero = _parse_moeda_brasil(item.get("Valor total"))
         if numero is not None:
             outros_explicitos.append(numero)
 
+    resumo_condicoes = (
+        f" Foram identificadas {len(tarifas)} tarifa(s) ou condição(ões) variável(is)"
+        f" e {len(isentos)} serviço(s) isento(s)."
+    )
+
     if total_pontual is not None and total_mensal is not None:
         base["valor_total_materiais_servicos"] = (
             "Valores separados por natureza: "
             f"custo pontual/implantação de {_formatar_moeda_brasil(total_pontual)}; "
-            f"custo fixo mensal de {_formatar_moeda_brasil(total_mensal)}/mês. "
-            "Esses valores não foram somados porque um é pontual e o outro é recorrente. "
-            "O valor global do contrato permanece não calculável sem prazo e quantidades definidos."
+            f"custo fixo mensal de {_formatar_moeda_brasil(total_mensal)}/mês."
+            + resumo_condicoes
+            + " Esses valores não foram somados porque um é pontual e o outro é recorrente. "
+            "O valor global do contrato permanece não calculável sem prazo, quantidades e utilização definidos."
         )
     elif total_pontual is not None:
         base["valor_total_materiais_servicos"] = (
-            f"{_formatar_moeda_brasil(total_pontual)} em valores pontuais confirmados. "
-            "Esse total não inclui mensalidades, percentuais ou tarifas variáveis e não representa o valor global do contrato."
+            f"{_formatar_moeda_brasil(total_pontual)} em valores pontuais confirmados."
+            + resumo_condicoes
+            + " Esse total não inclui mensalidades, percentuais ou tarifas variáveis e não representa o valor global do contrato."
         )
     elif total_mensal is not None:
         base["valor_total_materiais_servicos"] = (
-            f"{_formatar_moeda_brasil(total_mensal)}/mês em custos fixos recorrentes confirmados. "
-            "Não representa o valor global do contrato."
+            f"{_formatar_moeda_brasil(total_mensal)}/mês em custos fixos recorrentes confirmados."
+            + resumo_condicoes
+            + " Não representa o valor global do contrato."
         )
     elif outros_explicitos:
         total_outros = sum(outros_explicitos)
@@ -5010,7 +5042,25 @@ def _aplicar_financeiro_confiavel(base: Dict[str, Any], resultado_bruto: Dict[st
         )
 
     meses = _extrair_meses_vigencia(str(base.get("texto_extraido") or ""), base)
-    if mensal_num is not None and meses:
+    vigencia_texto = " ".join([
+        clean_text(base.get("periodo_vigencia_formatado")),
+        clean_text(base.get("tipo_vigencia")),
+        clean_text(base.get("vigencia_apos_assinatura")),
+        clean_text(base.get("status_contratual")),
+    ]).lower()
+    vigencia_indeterminada = "31/12/9999" in vigencia_texto or "indeterminad" in vigencia_texto
+
+    # Prazo mínimo, aviso prévio ou indenização em meses não equivalem ao prazo
+    # total de uma vigência indeterminada. Portanto, não projetamos um total
+    # global usando esses números como se fossem a duração do contrato.
+    if mensal_num is not None and vigencia_indeterminada:
+        base["valor_total_estimado_vigencia"] = (
+            "Não calculável com precisão: o contrato possui mensalidade, porém a vigência é por prazo indeterminado. "
+            "Tarifas variáveis também dependem da quantidade de acionistas, operações, itens ou demanda."
+            if tarifas
+            else "Não calculável com precisão: o contrato possui mensalidade, porém a vigência é por prazo indeterminado."
+        )
+    elif mensal_num is not None and meses:
         base_fixa = mensal_num * meses
         if tarifas:
             base["valor_total_estimado_vigencia"] = (
@@ -5021,10 +5071,6 @@ def _aplicar_financeiro_confiavel(base: Dict[str, Any], resultado_bruto: Dict[st
             base["valor_total_estimado_vigencia"] = (
                 f"{_formatar_moeda_brasil(base_fixa)}. Cálculo do sistema: {_formatar_moeda_brasil(mensal_num)}/mês x {meses} meses."
             )
-    elif mensal_num is not None and "31/12/9999" in clean_text(base.get("periodo_vigencia_formatado")):
-        base["valor_total_estimado_vigencia"] = (
-            "Não calculável com precisão: o contrato possui mensalidade, porém a vigência é por prazo indeterminado."
-        )
     elif tarifas:
         base["valor_total_estimado_vigencia"] = (
             "Não calculável com precisão. O total depende da quantidade de acionistas, operações, itens ou demanda durante a vigência."
@@ -5828,6 +5874,8 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
 
     risco = normalize_risco(resultado.get("risco"))
     score = resultado.get("score", 0)
+    confianca = resultado.get("confianca_extracao", 0)
+    indicadores_pendencias = resultado.get("indicadores_pendencias", {}) if isinstance(resultado.get("indicadores_pendencias"), dict) else {}
     risk_fill = excel_risk_fill(risco)
     pendencias_lista = resultado.get("pendencias", []) if isinstance(resultado.get("pendencias"), list) else []
     checklist_lista = resultado.get("checklist", []) if isinstance(resultado.get("checklist"), list) else []
@@ -5859,8 +5907,8 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     cards = [
         ("Status", v("status"), "A6:B8", s["green"]),
         ("Risco", risco, "C6:D8", risk_fill),
-        ("Score", str(score), "E6:F8", s["green"]),
-        ("Pendências", str(len(pendencias_lista)), "G6:H8", s["green"]),
+        ("Score de completude", str(score), "E6:F8", s["green"]),
+        ("Confiança da extração", f"{confianca}%", "G6:H8", s["green"]),
     ]
     for label, value, cell_range, fill in cards:
         _metric_card(ws, cell_range, label, value, fill)
@@ -5877,7 +5925,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
         ("Vigência", vigencia),
         ("Período de Vigência", v("periodo_vigencia_formatado")),
-        ("Pagamento", pagamento),
+        ("Condição de pagamento em dias", pagamento),
         ("Data da Assinatura", data_assinatura),
         ("Data do Reconhecimento de Firma", v("data_reconhecimento_firma", "Não aplicável")),
         ("Data do Contrato", v("data_contrato")),
@@ -5885,6 +5933,9 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
         ("Resumo de Aditivos", v("resumo_aditivos")),
+        ("Pendências críticas", indicadores_pendencias.get("pendencias_criticas", 0)),
+        ("Pontos de atenção", indicadores_pendencias.get("pontos_atencao", 0)),
+        ("Campos não localizados", indicadores_pendencias.get("campos_nao_localizados", 0)),
         ("Arquivos enviados para Análise IA", resumo_processamento.get("analise_profunda", "Não informado")),
         ("Arquivos de apoio", resumo_processamento.get("apoio", "Não informado")),
         ("Arquivos ignorados", resumo_processamento.get("ignorados", "Não informado")),
@@ -5911,7 +5962,7 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Valor do Contrato", valor_contrato),
         ("Valor Mensal Estimado", v("valor_mensal_estimado")),
         ("Valor Total Estimado da Vigência", v("valor_total_estimado_vigencia")),
-        ("Condição de Pagamento", pagamento),
+        ("Condição de pagamento em dias", pagamento),
         ("Vigência", vigencia),
         ("Período de Vigência", v("periodo_vigencia_formatado")),
         ("Data da Assinatura", data_assinatura),
@@ -5920,6 +5971,9 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
         ("Data Conclusão DocuSign", v("data_conclusao_docusign")),
         ("Pessoas que assinaram", v("pessoas_que_assinaram")),
         ("Contrato Assinado", v("contrato_assinado")),
+        ("Pendências críticas", indicadores_pendencias.get("pendencias_criticas", 0)),
+        ("Pontos de atenção", indicadores_pendencias.get("pontos_atencao", 0)),
+        ("Campos não localizados", indicadores_pendencias.get("campos_nao_localizados", 0)),
         ("Origem", origem),
         ("Modelo IA", modelo_ia),
         ("Data da Análise", data_analise),
@@ -5952,29 +6006,68 @@ def gerar_excel(resultado: Dict[str, Any], texto: str) -> io.BytesIO:
     ws = wb.create_sheet("Assinaturas")
     _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Assinaturas", 8, 95)
     _write_dataframe_table(ws, 5, assinaturas_df_excel, {
-        "A": 30, "B": 24, "C": 26, "D": 18, "E": 24, "F": 24, "G": 18, "H": 62
+        "A": 30, "B": 24, "C": 26, "D": 25, "E": 18, "F": 24, "G": 24, "H": 18, "I": 62
     }, 46)
+    ws.freeze_panes = "A6"
+    ws.page_setup.fitToWidth = 2
 
-    # ITENS DO CONTRATO
-    ws = wb.create_sheet("Itens do Contrato")
-    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Materiais e Serviços", 8, 95)
-    itens_df = pd.DataFrame(itens_lista)
-    if itens_df.empty:
-        itens_df = pd.DataFrame([{
+    # ITENS DO CONTRATO — visão comercial legível. Evidências técnicas ficam
+    # em uma aba separada para não comprimir 19 colunas em uma única página.
+    itens_df_completo = pd.DataFrame(itens_lista)
+    if itens_df_completo.empty:
+        itens_df_completo = pd.DataFrame([{
             "Item": "-",
+            "Grupo/Tabela": "N/A",
             "Descrição": "Nenhum material ou serviço unitário identificado no contrato/anexos.",
-            "Tipo": "N/A",
-            "Quantidade": "N/A",
+            "Natureza do valor": "N/A",
+            "Faixa/Condição": "N/A",
             "Unidade": "N/A",
             "Valor unitário": "Não localizado",
             "Valor total": "Não localizado",
+            "Periodicidade": "N/A",
+            "Condição comercial": "N/A",
             "Fonte": "N/A",
+            "Página": "N/A",
+            "Status de evidência": "N/A",
+            "Evidência": "N/A",
         }])
-    _write_dataframe_table(ws, 5, itens_df, {
-        "A": 10, "B": 52, "C": 15, "D": 14, "E": 14, "F": 18, "G": 18, "H": 22
-    }, 44)
 
-        # ADITIVOS
+    colunas_comerciais = [
+        "Item", "Grupo/Tabela", "Descrição", "Natureza do valor",
+        "Faixa/Condição", "Unidade", "Valor unitário", "Valor total",
+        "Periodicidade", "Condição comercial",
+    ]
+    for coluna in colunas_comerciais:
+        if coluna not in itens_df_completo.columns:
+            itens_df_completo[coluna] = "Não localizado"
+    itens_df = itens_df_completo[colunas_comerciais].copy()
+
+    ws = wb.create_sheet("Itens do Contrato")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Materiais e Serviços", len(colunas_comerciais), 90)
+    _write_dataframe_table(ws, 5, itens_df, {
+        "A": 8, "B": 30, "C": 48, "D": 23, "E": 30,
+        "F": 18, "G": 18, "H": 18, "I": 18, "J": 36,
+    }, 46)
+    ws.freeze_panes = "C6"
+    ws.auto_filter.ref = f"A5:J{ws.max_row}"
+    ws.page_setup.fitToWidth = 2
+
+    colunas_evidencia = ["Item", "Descrição", "Fonte", "Página", "Status de evidência", "Evidência"]
+    for coluna in colunas_evidencia:
+        if coluna not in itens_df_completo.columns:
+            itens_df_completo[coluna] = "Não localizado"
+    evidencias_itens_df = itens_df_completo[colunas_evidencia].copy()
+
+    ws = wb.create_sheet("Evidências dos Itens")
+    _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório Técnico • Evidências dos Materiais e Serviços", len(colunas_evidencia), 90)
+    _write_dataframe_table(ws, 5, evidencias_itens_df, {
+        "A": 8, "B": 48, "C": 24, "D": 12, "E": 22, "F": 70,
+    }, 48)
+    ws.freeze_panes = "A6"
+    ws.auto_filter.ref = f"A5:F{ws.max_row}"
+    ws.page_setup.fitToWidth = 2
+
+    # ADITIVOS
     ws = wb.create_sheet("Aditivos")
     _sheet_base(ws, "Auditor de Contratos - Grupo SBF", "Relatório de Análise Contratual • Aditivos", 8, 95)
 
@@ -7160,7 +7253,7 @@ def render_resumo_executivo_aba(resultado: Dict[str, Any]) -> None:
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
                     <span class="pill pill-ok">Status: {safe(status)}</span>
                     <span class="pill pill-ok">Risco: {safe(risco)}</span>
-                    <span class="pill pill-ok">Score: {safe(score)}</span>
+                    <span class="pill pill-ok">Score de completude: {safe(score)}</span>
                 </div>
             </div>
             <div style="font-size:15px; line-height:1.65; color:#fff; font-weight:800;">
@@ -7228,7 +7321,8 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
                 "Nome": nome,
                 "Papel/Cargo": clean_text(item.get("papel_cargo") or item.get("Papel/Cargo") or item.get("cargo") or item.get("papel") or "Não localizado"),
                 "E-mail": clean_text(item.get("email") or item.get("e-mail") or item.get("Email") or "Não localizado"),
-                "Data da assinatura": clean_text(item.get("data_assinatura") or item.get("Data da assinatura") or data_padrao or "Não localizado"),
+                "Data individual da assinatura": clean_text(item.get("data_assinatura") or item.get("Data da assinatura") or "Não localizada individualmente"),
+                "Data do instrumento": clean_text(item.get("data_instrumento") or resultado.get("data_contrato") or data_padrao or "Não localizado"),
                 "Data do reconhecimento de firma": clean_text(
                     item.get("data_reconhecimento_firma")
                     or item.get("Data do reconhecimento de firma")
@@ -7247,7 +7341,8 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
                 "Nome": nome,
                 "Papel/Cargo": "Não localizado",
                 "E-mail": "Não localizado",
-                "Data da assinatura": data_padrao or "Não localizado",
+                "Data individual da assinatura": "Não localizada individualmente",
+                "Data do instrumento": clean_text(resultado.get("data_contrato") or data_padrao or "Não localizado"),
                 "Data do reconhecimento de firma": clean_text(resultado.get("data_reconhecimento_firma") or "Não aplicável"),
                 "Fonte": fonte_padrao,
                 "Página": "Não localizado",
@@ -7260,7 +7355,8 @@ def montar_df_assinaturas(resultado: Dict[str, Any]) -> pd.DataFrame:
             "Nome": "Não localizado",
             "Papel/Cargo": "Não localizado",
             "E-mail": "Não localizado",
-            "Data da assinatura": data_padrao or "Não localizado",
+            "Data individual da assinatura": "Não localizada individualmente",
+            "Data do instrumento": clean_text(resultado.get("data_contrato") or data_padrao or "Não localizado"),
             "Data do reconhecimento de firma": clean_text(resultado.get("data_reconhecimento_firma") or "Não aplicável"),
             "Fonte": fonte_padrao,
             "Página": "Não localizado",
@@ -7282,7 +7378,7 @@ def render_assinaturas_contrato(resultado: Dict[str, Any]) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(render_metric("Signatários", total), unsafe_allow_html=True)
     c2.markdown(render_metric("Contrato assinado", contrato_assinado), unsafe_allow_html=True)
-    c3.markdown(render_metric("Data principal", data_principal), unsafe_allow_html=True)
+    c3.markdown(render_metric("Data do instrumento", data_principal), unsafe_allow_html=True)
     c4.markdown(render_metric("Fonte", "DocuSign/Contrato" if "docusign" in alerta.lower() else "Contrato"), unsafe_allow_html=True)
 
     st.markdown(
@@ -7447,6 +7543,7 @@ def atualizar_popup_processamento(
     arquivo_atual: str,
     etapa_atual: str,
     inicio_processamento: float,
+    finalizado: bool = False,
 ) -> None:
     """Atualiza um painel/modal fixo com andamento ao vivo da análise."""
     total = len(arquivos_status)
@@ -7454,8 +7551,15 @@ def atualizar_popup_processamento(
     erros = sum(1 for s in arquivos_status.values() if s == "ERRO")
     pendentes = sum(1 for s in arquivos_status.values() if s == "PENDENTE")
 
-    percentual = int((concluidos / total) * 100) if total else 0
+    percentual = 100 if finalizado else (int((concluidos / total) * 100) if total else 0)
     etapa_html = safe(etapa_atual).replace("\n", "<br>")
+    classe_final = " finalizado" if finalizado else ""
+    titulo_popup = "✅ Análise concluída" if finalizado else "🚀 Analisando contrato e anexos"
+    subtitulo_popup = (
+        "O resumo final permanece visível abaixo. Você já pode consultar as abas e baixar o Excel."
+        if finalizado
+        else "Não feche esta tela. O painel abaixo mostra o andamento em tempo real."
+    )
     if str(arquivo_atual or "").startswith("Arquivos preparados"):
         linha_arquivo_atual = f'<div><b>{safe(arquivo_atual)}</b></div>'
     else:
@@ -7500,6 +7604,19 @@ display: flex;
 align-items: center;
 justify-content: center;
 backdrop-filter: blur(4px);
+}}
+.popup-processamento-backdrop.finalizado {{
+position: relative;
+inset: auto;
+background: transparent;
+z-index: auto;
+display: block;
+backdrop-filter: none;
+margin: 8px 0 18px 0;
+}}
+.popup-processamento-backdrop.finalizado .popup-processamento-card {{
+width: 100%;
+max-height: none;
 }}
 .popup-processamento-card {{
 width: min(980px, 92vw);
@@ -7638,11 +7755,11 @@ color: rgba(255,255,255,0.62);
 font-size: 12px;
 }}
 </style>
-<div class="popup-processamento-backdrop">
+<div class="popup-processamento-backdrop{classe_final}">
 <div class="popup-processamento-card">
 <div class="popup-processamento-header">
-<h2>🚀 Analisando contrato e anexos</h2>
-<p>Não feche esta tela. O painel abaixo mostra o andamento em tempo real.</p>
+<h2>{titulo_popup}</h2>
+<p>{subtitulo_popup}</p>
 </div>
 <div class="popup-processamento-body">
 <div class="popup-metricas">
@@ -8348,7 +8465,7 @@ def render_triagem_anexos(resultado: Dict[str, Any]) -> None:
         st.dataframe(df[colunas].style.apply(_cor_triagem, axis=1), use_container_width=True, hide_index=True)
 
 def render_resumo_processamento_final(resultado: Dict[str, Any]) -> None:
-    """Mostra um resumo final da execução depois que o popup fecha."""
+    """Mostra um resumo final da execução depois que o painel ao vivo é concluído."""
     resumo = resultado.get("resumo_processamento") or {}
     if not isinstance(resumo, dict) or not resumo:
         return
@@ -8366,7 +8483,7 @@ def render_resumo_processamento_final(resultado: Dict[str, Any]) -> None:
     html = f'''
 <div class="executive-box" style="padding:22px 24px;">
     <h3 style="margin:0 0 14px 0;">✅ Análise concluída</h3>
-    <p style="margin:0 0 18px 0;">O processamento foi finalizado com sucesso. O popup foi fechado para liberar a tela, mas o resumo da execução fica registrado abaixo.</p>
+    <p style="margin:0 0 18px 0;">O processamento foi finalizado com sucesso. O painel final permanece registrado acima e este resumo também fica disponível para consulta.</p>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;">
         <div class="valor-card" style="min-height:95px;padding:14px;">
             <div class="valor-titulo">TOTAL</div>
@@ -8414,7 +8531,17 @@ def render_aditivos_contrato(resultado: Dict[str, Any]) -> None:
     total = len(aditivos)
     assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() == "SIM")
     nao_assinados = sum(1 for a in aditivos if clean_text(a.get("Assinado")).upper() in ("NÃO", "NAO"))
-    valor_total_fmt = "Sem valor global fixo"
+    if total == 0:
+        valor_total_fmt = "Não aplicável"
+    else:
+        valores_aditivos = []
+        for aditivo in aditivos:
+            for chave in ("Valor do aditivo", "Valor", "valor_aditivo", "Aditivo valor"):
+                numero = _parse_moeda_brasil(aditivo.get(chave))
+                if numero is not None:
+                    valores_aditivos.append(numero)
+                    break
+        valor_total_fmt = _formatar_moeda_brasil(sum(valores_aditivos)) if valores_aditivos else "Não localizado"
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Aditivos", total)
@@ -9630,8 +9757,8 @@ if pagina == "📄 Nova Análise":
                 # isso evita duplicar faixas e criar descrições truncadas pelo OCR.
                 itens_fallback_local = [] if itens_tabela_documento else extrair_itens_local(texto)
                 itens_completos = mesclar_itens_comerciais(
-                    resultado_bruto_ia.get("itens_contrato", []),
                     itens_tabela_documento,
+                    resultado_bruto_ia.get("itens_contrato", []),
                     itens_fallback_local,
                 )
                 resultado_bruto_ia["itens_contrato"] = normalizar_itens_contrato(itens_completos)
@@ -9703,9 +9830,8 @@ if pagina == "📄 Nova Análise":
                     "Concluído",
                     f"Análise concluída com sucesso\nTempo total: {resultado['resumo_processamento']['tempo_total']}\nTempo da IA: {resultado['resumo_processamento']['tempo_ia']}",
                     inicio_processamento,
+                    finalizado=True,
                 )
-                time.sleep(1.2)
-                fechar_popup_processamento(popup_processamento)
 
             except Exception as e:
                 fechar_popup_processamento(popup_processamento)

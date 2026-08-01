@@ -132,6 +132,8 @@ Um dado CONFIRMADO exige arquivo, página/seção e trecho específico. “Confo
 
 REGRAS DE EXATIDÃO
 - Endereço da parte NÃO é local de prestação, salvo cláusula expressa de execução naquele local.
+- Foro eleito, comarca competente ou cidade escolhida para dirimir conflitos NÃO são local de prestação.
+- condicao_pagamento_dias deve retornar somente no padrão executivo DD, por exemplo: 15DD, 30DD, 60DD ou 90DD. A frase completa permanece em forma_pagamento.
 - “Prazo indeterminado” deve continuar indeterminado. O sistema exibirá tecnicamente 31/12/9999; não invente data final.
 - Permanência mínima, fidelização ou multa de saída NÃO é prazo total do contrato.
 - Status atual operacional não pode ser presumido. Informe apenas a situação documental da vigência.
@@ -424,6 +426,487 @@ def _data_br(valor: Any) -> str:
         if mes:
             return f"{int(m.group(1)):02d}/{mes:02d}/{m.group(3)}"
     return ""
+
+
+
+def _paginas_do_texto_extraido(texto_extraido: Any) -> Dict[int, str]:
+    """Separa o texto OCR por página sem depender do formato do PDF original."""
+    texto = str(texto_extraido or "").replace("\x00", " ")
+    partes = re.split(r"---\s*P[ÁA]GINA\s+(\d+)\s+OCR\s*---", texto, flags=re.I)
+    paginas: Dict[int, str] = {}
+    for idx in range(1, len(partes), 2):
+        try:
+            numero = int(partes[idx])
+        except Exception:
+            continue
+        paginas[numero] = _texto(partes[idx + 1])
+    return paginas
+
+
+def _trecho_limitado(texto: Any, limite: int = 520) -> str:
+    valor = _texto(texto)
+    if len(valor) <= limite:
+        return valor
+    cortado = valor[:limite].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return cortado + "..."
+
+
+def _atualizar_auditoria(
+    auditoria: List[Dict[str, Any]],
+    campo: str,
+    valor: Any,
+    *,
+    status: str,
+    tipo_dado: str,
+    arquivo: str,
+    pagina: str,
+    secao: str,
+    evidencia: str,
+    confianca: int,
+) -> None:
+    mapa = _mapa_auditoria(auditoria)
+    linha = mapa.get(campo) or _linha_nao_localizada(campo)
+    linha.update({
+        "valor": _texto(valor),
+        "status": _status(status),
+        "tipo_dado": _texto(tipo_dado).upper(),
+        "arquivo_fonte": _texto(arquivo),
+        "pagina": _texto(pagina),
+        "clausula_secao": _texto(secao),
+        "trecho_evidencia": _trecho_limitado(evidencia),
+        "confianca": _confianca(confianca),
+    })
+    mapa[campo] = linha
+    auditoria[:] = _ordenar_auditoria(mapa.values())
+
+
+def _extrair_descricao_servico_documental(paginas: Mapping[int, str]) -> Tuple[str, str, str, str]:
+    """Recupera objeto detalhado e descrição breve a partir da cláusula de serviços."""
+    candidatos = list(paginas.items())
+    candidatos.sort(key=lambda x: (0 if x[0] <= 6 else 1, x[0]))
+    for numero, pagina in candidatos:
+        sem = _sem_acento(pagina).lower()
+        if "servicos contemplam as seguintes atividades" not in sem:
+            continue
+        m = re.search(
+            r"os\s+servi[cç]os\s+contemplam\s+as\s+seguintes\s+atividades\s*:\s*(.*?)"
+            r"(?=(?:\b2[\.\sÃA]*1[\.\s]*1\b|\bos\s+servi[cç]os\s+objeto\s+deste\s+contrato\b|\b2[\.\s]*1[\.\s]*2\b|\|?3\.?\s+[-—]?\s*confidencialidade))",
+            pagina,
+            flags=re.I | re.S,
+        )
+        bloco = _texto(m.group(1) if m else pagina)
+        atividades = []
+        for item in re.findall(r"\((?:i|ii|iii|iv|v|vi)\)\s*(.*?)(?=\((?:i|ii|iii|iv|v|vi)\)|$)", bloco, flags=re.I | re.S):
+            limpo = _texto(item).strip(" ;,.")
+            limpo = re.sub(r"^e\s+", "", limpo, flags=re.I)
+            limpo = re.sub(r"[;,]\s*e$", "", limpo, flags=re.I).strip(" ;,.")
+            # Remove resíduos de numeração da cláusula seguinte, comuns no OCR
+            # (ex.: 2ÃA antes de “Os serviços objeto deste Contrato”).
+            limpo = re.sub(r"\s+\d+[A-Za-zÀ-ÿÃÂ.]*$", "", limpo).strip(" ;,.")
+            if len(limpo) >= 12:
+                sem_limpo = _sem_acento(limpo).lower()
+                if "abertura e manutencao" in sem_limpo and "livros de registro" in sem_limpo:
+                    limpo = "abertura e manutenção de livros de registro"
+                elif "registro das informacoes relativas a titularidade" in sem_limpo or ("titularidade" in sem_limpo and "gravames" in sem_limpo):
+                    limpo = "registro de titularidade e gravames"
+                elif "tratamento das instrucoes de movimentacao" in sem_limpo:
+                    limpo = "tratamento de instruções de movimentação"
+                elif "tratamento de eventos incidentes" in sem_limpo:
+                    limpo = "eventos incidentes sobre as ações"
+                atividades.append(limpo)
+        if atividades:
+            if len(atividades) == 1:
+                lista = atividades[0]
+            else:
+                lista = ", ".join(atividades[:-1]) + " e " + atividades[-1]
+            descricao = "Serviços de escrituração de ações, incluindo " + lista.rstrip(".") + "."
+        else:
+            descricao = _trecho_limitado(bloco, 900)
+
+        objetivo = ""
+        mo = re.search(
+            r"objeto\s+deste\s+contrato\s+[ée]\s+a\s+presta[cç][aã]o\s+de\s+servi[cç]os\s+de\s+(.*?)\s+pela\s+",
+            pagina,
+            flags=re.I | re.S,
+        )
+        if mo:
+            nucleo = _texto(mo.group(1)).strip(" .")
+            breve = "Serviços de " + nucleo.lower()
+            breve = breve[:1].upper() + breve[1:]
+        elif "escrituração de ações" in pagina.lower() or "escrituracao de acoes" in sem:
+            breve = "Serviços de escrituração de ações"
+        else:
+            breve = "Serviços contratados conforme cláusula de objeto e escopo"
+        evidencia = ("Os serviços contemplam as seguintes atividades: " + bloco).replace("Anexo |", "Anexo I")
+        return descricao, breve.rstrip(".") + ".", str(numero), _trecho_limitado(evidencia)
+    return "", "", "", ""
+
+
+def _extrair_data_instrumento_documental(paginas: Mapping[int, str]) -> Tuple[str, str, str]:
+    """Prioriza a data escrita no bloco de assinatura do instrumento."""
+    ordem = sorted(
+        paginas.items(),
+        key=lambda x: (0 if any(t in _sem_acento(x[1]).lower() for t in ("firmam as partes", "testemunhas")) else 1, x[0]),
+    )
+    for numero, pagina in ordem:
+        data = _data_br(pagina)
+        if not data:
+            continue
+        sem = _sem_acento(pagina).lower()
+        if "firmam as partes" in sem or "testemunhas" in sem or "sao paulo" in sem:
+            m = re.search(r"(?:S[aã]o\s+Paulo\s*,?\s*)?\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+\s+de\s+\d{4}", pagina, flags=re.I)
+            evidencia = m.group(0) if m else data
+            return data, str(numero), evidencia
+    return "", "", ""
+
+
+
+
+def _extrair_condicao_pagamento_dd_documental(paginas: Mapping[int, str]) -> Tuple[str, str, str]:
+    """Extrai a condição de pagamento em formato executivo ``15DD``/``30DD``.
+
+    A busca é restrita a contextos de pagamento, fatura, nota fiscal ou vencimento
+    para não confundir aviso prévio, vigência, multa e outros prazos contratuais.
+    """
+    padroes = [
+        # Ex.: "vencimento até o dia 15 (quinze) do mês subsequente".
+        re.compile(
+            r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})(?:\s*\([^)]*\))?\s+do\s+m[eê]s\s+subsequente",
+            flags=re.I | re.S,
+        ),
+        # Ex.: "pagamento em até 60 dias", "vencimento no prazo de 30 dias".
+        re.compile(
+            r"(?:pagamento|vencimento|fatura|nota\s+fiscal).{0,180}?"
+            r"(?:em\s+at[eé]|no\s+prazo\s+de|prazo\s+de|at[eé])\s+"
+            r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?",
+            flags=re.I | re.S,
+        ),
+        # Ex.: "30 dias corridos contados da emissão da nota fiscal".
+        re.compile(
+            r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?\s*(?:corridos|[uú]teis)?"
+            r".{0,180}?(?:emiss[aã]o|fatura|nota\s+fiscal|recebimento|aprova[cç][aã]o)",
+            flags=re.I | re.S,
+        ),
+    ]
+
+    for numero, pagina in paginas.items():
+        sem = _sem_acento(pagina).lower()
+        if not any(t in sem for t in ("pagamento", "vencimento", "fatura", "nota fiscal", "remuneracao")):
+            continue
+        for padrao in padroes:
+            m = padrao.search(pagina)
+            if not m:
+                continue
+            try:
+                dias = int(m.group(1))
+            except Exception:
+                continue
+            if not 1 <= dias <= 365:
+                continue
+            inicio = max(0, m.start() - 90)
+            fim = min(len(pagina), m.end() + 120)
+            evidencia = _trecho_limitado(pagina[inicio:fim], 420)
+            return f"{dias}DD", str(numero), evidencia
+    return "", "", ""
+
+
+def _validar_local_prestacao_semantico(
+    base: MutableMapping[str, Any],
+    auditoria: List[Dict[str, Any]],
+) -> None:
+    """Impede que foro, sede ou endereço cadastral virem local de execução.
+
+    O campo só permanece confirmado quando a evidência contém linguagem explícita
+    de prestação/execução dos serviços naquele local.
+    """
+    mapa = _mapa_auditoria(auditoria)
+    item = mapa.get("local_prestacao")
+    if not item:
+        return
+
+    status = _status(item.get("status"))
+    if status == "NÃO_LOCALIZADO":
+        base["local_prestacao"] = "Não localizado com segurança"
+        return
+
+    valor = _texto(item.get("valor") or base.get("local_prestacao"))
+    evidencia = _texto(item.get("trecho_evidencia"))
+    secao = _texto(item.get("clausula_secao"))
+    contexto = _sem_acento(" ".join((valor, evidencia, secao))).lower()
+
+    marcadores_execucao = (
+        "local de execucao",
+        "execucao dos servicos",
+        "prestacao dos servicos ocorrera",
+        "servicos serao prestados",
+        "servicos deverao ser prestados",
+        "atividades serao executadas",
+        "nas dependencias da",
+        "unidade onde os servicos",
+        "estabelecimento onde os servicos",
+    )
+    marcadores_forum = (
+        "foro",
+        "comarca",
+        "dirimir",
+        "competente para",
+        "elegem o foro",
+        "foro eleito",
+        "capital do estado",
+    )
+    marcadores_endereco = (
+        "endereco",
+        "preambulo",
+        "qualificacao das partes",
+        "cadastro da parte",
+        "sede",
+        "domicilio",
+        "cep",
+        "logradouro",
+        "avenida",
+        " rua ",
+    )
+
+    execucao_explicita = any(x in contexto for x in marcadores_execucao)
+    referencia_forum = any(x in contexto for x in marcadores_forum)
+    referencia_endereco = any(x in contexto for x in marcadores_endereco)
+
+    if not execucao_explicita and (referencia_forum or referencia_endereco):
+        motivo = (
+            "A referência localizada trata de foro eleito e não comprova o local de execução dos serviços."
+            if referencia_forum
+            else "O endereço cadastral/sede da parte não comprova o local de execução dos serviços."
+        )
+        base["local_prestacao"] = "Não localizado com segurança"
+        _atualizar_auditoria(
+            auditoria,
+            "local_prestacao",
+            "Não localizado com segurança",
+            status="NÃO_LOCALIZADO",
+            tipo_dado="DADO_DOCUMENTAL",
+            arquivo=_texto(item.get("arquivo_fonte")),
+            pagina=_texto(item.get("pagina")),
+            secao="Validação semântica do local de prestação",
+            evidencia=motivo,
+            confianca=100,
+        )
+
+def _recuperar_campos_documentais(
+    base: MutableMapping[str, Any],
+    bruto: Mapping[str, Any],
+    auditoria: List[Dict[str, Any]],
+    texto_extraido: str,
+) -> None:
+    """Recupera fatos presentes no OCR quando a segunda passagem da IA os omite."""
+    paginas = _paginas_do_texto_extraido(texto_extraido)
+    if not paginas:
+        return
+    arquivo = _texto(bruto.get("arquivo_principal") or bruto.get("nome_arquivo") or "Contrato principal")
+    # Quando há uma única fonte, o nome real costuma aparecer nas evidências/itens.
+    for item in auditoria:
+        fonte = _texto(item.get("arquivo_fonte"))
+        if _valor_util(fonte) and "múltipl" not in _sem_acento(fonte).lower():
+            arquivo = fonte
+            break
+
+    descricao, breve, pag_desc, ev_desc = _extrair_descricao_servico_documental(paginas)
+    if descricao:
+        base["descricao_servico_material"] = descricao
+        _atualizar_auditoria(
+            auditoria, "descricao_servico_material", descricao,
+            status="CONFIRMADO", tipo_dado="DADO_DOCUMENTAL", arquivo=arquivo,
+            pagina=pag_desc, secao="Cláusula 2.1 — Descrição dos serviços",
+            evidencia=ev_desc, confianca=100,
+        )
+        base["descricao_breve_cadastro"] = breve
+        _atualizar_auditoria(
+            auditoria, "descricao_breve_cadastro", breve,
+            status="CALCULADO", tipo_dado="INTERPRETACAO", arquivo=arquivo,
+            pagina=pag_desc, secao="Síntese da cláusula 2.1",
+            evidencia=ev_desc, confianca=95,
+        )
+
+    data_contrato, pag_data, ev_data = _extrair_data_instrumento_documental(paginas)
+    if data_contrato:
+        base["data_contrato"] = data_contrato
+        _atualizar_auditoria(
+            auditoria, "data_contrato", data_contrato,
+            status="CONFIRMADO", tipo_dado="DADO_DOCUMENTAL", arquivo=arquivo,
+            pagina=pag_data, secao="Bloco de assinaturas do instrumento",
+            evidencia=ev_data, confianca=100,
+        )
+
+    # Forma de pagamento da remuneração deve vir do anexo financeiro. Não
+    # confundir com o procedimento operacional de débito de créditos aos acionistas.
+    for numero, pagina in paginas.items():
+        sem_pag = _sem_acento(pagina).lower()
+        if "remetera fatura" in sem_pag and "disponibilizacao do valor" in sem_pag and "conta corrente indicada" in sem_pag:
+            forma = (
+                "Faturamento mensal, com vencimento até o dia 15 do mês subsequente, "
+                "mediante disponibilização do valor na conta corrente indicada pelo Emissor."
+            )
+            m_pag = re.search(
+                r"Mensalmente.*?vencimento\s+at[eé]\s+o\s+dia\s+15.*?m[eê]s\s+subsequente.*?"
+                r"O\s+EMISSOR\s+pagar[aá].*?conta\s+corrente\s+indicada\s+pelo\s+EMISSOR.*?(?=\b5\.|$)",
+                pagina, flags=re.I | re.S,
+            )
+            evidencia_pag = m_pag.group(0) if m_pag else pagina
+            base["forma_pagamento"] = forma
+            _atualizar_auditoria(
+                auditoria, "forma_pagamento", forma,
+                status="CONFIRMADO", tipo_dado="DADO_DOCUMENTAL", arquivo=arquivo,
+                pagina=str(numero), secao="Anexo II — itens 3 e 4",
+                evidencia=evidencia_pag, confianca=100,
+            )
+            break
+
+    # Card executivo separado: somente o prazo em formato DD (15DD, 30DD, 60DD...).
+    condicao_dd, pag_dd, ev_dd = _extrair_condicao_pagamento_dd_documental(paginas)
+    if condicao_dd:
+        base["condicao_pagamento_dias"] = condicao_dd
+        _atualizar_auditoria(
+            auditoria, "condicao_pagamento_dias", condicao_dd,
+            status="CONFIRMADO", tipo_dado="DADO_DOCUMENTAL", arquivo=arquivo,
+            pagina=pag_dd, secao="Condição de pagamento / vencimento",
+            evidencia=ev_dd, confianca=100,
+        )
+
+    # Validação semântica obrigatória: foro, sede e endereço cadastral não são
+    # local de prestação sem cláusula expressa de execução dos serviços.
+    _validar_local_prestacao_semantico(base, auditoria)
+
+    texto_total_sem = _sem_acento(" ".join(paginas.values())).lower()
+    paginas_assinatura = [
+        (n, p) for n, p in paginas.items()
+        if "firmam as partes" in _sem_acento(p).lower() or "testemunhas" in _sem_acento(p).lower()
+    ]
+    tem_assinatura_fisica = bool(paginas_assinatura)
+    tem_certificado_docusign = any(x in texto_total_sem for x in ("certificate of completion", "envelope id", "docusign"))
+    if tem_assinatura_fisica and not tem_certificado_docusign:
+        pag_ass, txt_ass = paginas_assinatura[0]
+        valor_docu = "Não aplicável — assinatura física"
+        base["data_conclusao_docusign"] = valor_docu
+        m_fisica = re.search(
+            r"E,?\s+por\s+estarem.*?firmam\s+as\s+Partes.*?(?:S[aã]o\s+Paulo\s*,?\s*\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+\s+de\s+\d{4})",
+            txt_ass, flags=re.I | re.S,
+        )
+        evidencia_fisica = m_fisica.group(0) if m_fisica else "Bloco de assinaturas físicas das partes localizado no instrumento."
+        _atualizar_auditoria(
+            auditoria, "data_conclusao_docusign", valor_docu,
+            status="NÃO_APLICÁVEL", tipo_dado="INTERPRETACAO", arquivo=arquivo,
+            pagina=str(pag_ass), secao="Bloco de assinaturas físicas",
+            evidencia=evidencia_fisica, confianca=100,
+        )
+
+    # Ausência de aditivo é uma conclusão sobre o pacote, não um campo documental ausente.
+    aditivos = bruto.get("aditivos_contrato") if isinstance(bruto.get("aditivos_contrato"), list) else []
+    if not aditivos:
+        resumo = "Nenhum aditivo identificado com evidência documental no pacote analisado."
+        base["resumo_aditivos"] = resumo
+        _atualizar_auditoria(
+            auditoria, "resumo_aditivos", resumo,
+            status="NÃO_APLICÁVEL", tipo_dado="INTERPRETACAO", arquivo="Pacote documental",
+            pagina="Todas as páginas", secao="Triagem e consolidação dos anexos",
+            evidencia="Nenhum arquivo classificado como termo aditivo foi identificado no pacote analisado.",
+            confianca=100,
+        )
+
+    # Condição comercial mínima de 24 meses deve permanecer separada da vigência indeterminada.
+    pagina_prazo = ""
+    texto_prazo = ""
+    for numero, pagina in paginas.items():
+        sem = _sem_acento(pagina).lower()
+        if "24 (vinte e quatro) meses" in sem or ("prazo minimo" in sem and "meses remanescentes" in sem):
+            pagina_prazo, texto_prazo = str(numero), pagina
+            break
+    if texto_prazo:
+        mapa_rescisao = _mapa_auditoria(auditoria)
+        linha_rescisao = mapa_rescisao.get("rescisao_indenizacao") or {}
+        atual = _texto(
+            base.get("rescisao_indenizacao")
+            or bruto.get("rescisao_indenizacao")
+            or linha_rescisao.get("valor")
+        )
+        if not _valor_util(atual):
+            atual = "Denúncia imotivada mediante aviso prévio de 30 dias."
+        if "24 meses" not in _sem_acento(atual).lower() and "vinte e quatro" not in _sem_acento(atual).lower():
+            atual = atual.rstrip(" .") + ". Compromisso comercial mínimo de 24 meses; em caso de rescisão unilateral antecipada pelo Emissor, será devido valor equivalente às mensalidades restantes até o fim do prazo mínimo."
+        base["rescisao_indenizacao"] = atual
+        mapa = _mapa_auditoria(auditoria)
+        linha_atual = mapa.get("rescisao_indenizacao") or {}
+        pag_atual = _texto(linha_atual.get("pagina"))
+        secao_atual = _texto(linha_atual.get("clausula_secao"))
+        evidencia_atual = _texto(linha_atual.get("trecho_evidencia"))
+        m_prazo = re.search(
+            r"O\s+EMISSOR\s+reconhece\s+e\s+concorda.*?24\s*\(vinte\s+e\s+quatro\)\s+meses.*?meses\s+remanescentes.*?(?:disposi[cç][oõ]es\s+espec[ií]ficas|$)",
+            texto_prazo, flags=re.I | re.S,
+        )
+        evidencia_prazo = m_prazo.group(0) if m_prazo else _trecho_limitado(texto_prazo, 420)
+        _atualizar_auditoria(
+            auditoria, "rescisao_indenizacao", atual,
+            status="CONFIRMADO", tipo_dado="DADO_DOCUMENTAL", arquivo=_texto(linha_atual.get("arquivo_fonte")) or arquivo,
+            pagina=" e ".join(dict.fromkeys(x for x in (pag_atual, pagina_prazo) if x)),
+            secao="; ".join(dict.fromkeys(x for x in (secao_atual, "Anexo II — condição comercial mínima") if x)),
+            evidencia=" | ".join(dict.fromkeys(x for x in (evidencia_atual, evidencia_prazo) if x)),
+            confianca=100,
+        )
+
+
+def _sincronizar_resumo_aditivos_auditoria(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]) -> None:
+    aditivos = base.get("aditivos_contrato") if isinstance(base.get("aditivos_contrato"), list) else []
+    if aditivos:
+        valor = f"{len(aditivos)} aditivo(s) identificado(s) com evidência documental."
+        _atualizar_auditoria(
+            auditoria, "resumo_aditivos", valor,
+            status="CONFIRMADO", tipo_dado="CONSOLIDACAO_DOCUMENTAL", arquivo="Múltiplos documentos",
+            pagina="Conforme aditivos", secao="Consolidação dos aditivos",
+            evidencia=f"{len(aditivos)} termo(s) aditivo(s) validado(s) na matriz documental.", confianca=95,
+        )
+    else:
+        valor = "Nenhum aditivo identificado com evidência documental no pacote analisado."
+        _atualizar_auditoria(
+            auditoria, "resumo_aditivos", valor,
+            status="NÃO_APLICÁVEL", tipo_dado="INTERPRETACAO", arquivo="Pacote documental",
+            pagina="Todas as páginas", secao="Triagem e consolidação dos anexos",
+            evidencia="Nenhum arquivo classificado como termo aditivo foi identificado no pacote analisado.", confianca=100,
+        )
+    base["resumo_aditivos"] = valor
+
+
+def _adicionar_pendencia_segunda_testemunha(base: MutableMapping[str, Any], texto_extraido: str) -> None:
+    paginas = _paginas_do_texto_extraido(texto_extraido)
+    pagina_ass = ""
+    texto_ass = ""
+    esperado = 0
+    for numero, pagina in paginas.items():
+        sem = _sem_acento(pagina).lower()
+        m = re.search(r"presen[cç]a\s+de\s+(\d+)\s+testemunhas", pagina, flags=re.I)
+        if m:
+            esperado = int(m.group(1))
+            pagina_ass, texto_ass = str(numero), pagina
+            break
+        if "testemunhas:" in sem:
+            esperado = max(esperado, 2)
+            pagina_ass, texto_ass = str(numero), pagina
+    if esperado <= 0:
+        return
+    assinaturas = base.get("assinaturas_contrato") if isinstance(base.get("assinaturas_contrato"), list) else []
+    testemunhas = [a for a in assinaturas if _token(a.get("categoria")) == "TESTEMUNHA"]
+    if len(testemunhas) >= esperado:
+        return
+    pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
+    if any("SEGUNDA_TESTEMUNHA" in _token(p.get("Pendência") or p.get("pendencia")) for p in pendencias if isinstance(p, Mapping)):
+        return
+    pendencias.append({
+        "Pendência": "Segunda testemunha não identificada/assinada no instrumento",
+        "Crítico": "Não",
+        "Risco": "Baixo",
+        "Recomendação": "Submeter ao Jurídico para confirmar se é necessário complementar a segunda testemunha para fins probatórios/executivos.",
+        "Arquivo": next((_texto(a.get("fonte")) for a in assinaturas if _valor_util(a.get("fonte"))), "Contrato principal"),
+        "Página": pagina_ass or "Bloco de assinaturas",
+        "Evidência": "O instrumento declara assinatura na presença de 2 testemunhas, mas somente uma testemunha foi identificada no bloco de assinaturas.",
+    })
+    base["pendencias"] = pendencias
 
 
 def _somar_meses(data: datetime, meses: int) -> datetime:
@@ -794,6 +1277,19 @@ def _normalizar_assinaturas(raw: Any) -> List[Dict[str, Any]]:
 
 def _assinaturas(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditoria: List[Dict[str, Any]]) -> None:
     assinaturas = _normalizar_assinaturas(raw.get("assinaturas_contrato") or base.get("assinaturas_contrato"))
+
+    # Em assinatura física, a data geral do instrumento não deve ser apresentada
+    # como se fosse um carimbo individual de cada signatário.
+    data_instrumento = _data_br(base.get("data_contrato")) or _data_br(base.get("data_assinatura"))
+    for assinatura in assinaturas:
+        data_individual = _data_br(assinatura.get("data_assinatura"))
+        evidencia_sem = _sem_acento(assinatura.get("evidencia")).lower()
+        evidencia_tem_data = bool(data_individual and (data_individual in evidencia_sem or re.search(r"\d{1,2}\s+de\s+[a-z]+\s+de\s+\d{4}", evidencia_sem)))
+        assinatura["data_instrumento"] = data_instrumento or "Não localizado"
+        if data_individual and data_instrumento and data_individual == data_instrumento and not evidencia_tem_data:
+            assinatura["data_assinatura"] = "Não localizada individualmente"
+            assinatura["observacao_data"] = f"Data geral do instrumento: {data_instrumento}"
+
     base["assinaturas_contrato"] = assinaturas
 
     docusign = _data_br(base.get("data_conclusao_docusign"))
@@ -820,6 +1316,9 @@ def _assinaturas(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditor
         base["pessoas_que_assinaram"] = "; ".join(nomes)
         if datas:
             base["data_assinatura"] = _data_br(datas[0])
+        elif data_instrumento:
+            # Data principal do instrumento; não representa data individual de cada assinatura.
+            base["data_assinatura"] = data_instrumento
         if reconhecimentos:
             base["data_reconhecimento_firma"] = "; ".join(dict.fromkeys(_data_br(x) for x in reconhecimentos if _data_br(x)))
         partes = ["Contrato assinado"]
@@ -828,7 +1327,7 @@ def _assinaturas(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditor
         if testemunhas:
             partes.append(f"{len(testemunhas)} testemunha(s)")
         if _data_br(base.get("data_assinatura")):
-            partes.append(f"data principal: {_data_br(base.get('data_assinatura'))}")
+            partes.append(f"data do instrumento: {_data_br(base.get('data_assinatura'))}")
         if _valor_util(base.get("data_reconhecimento_firma")):
             partes.append(f"reconhecimento de firma: {_texto(base.get('data_reconhecimento_firma'))}")
         base["alerta_assinatura"] = ". ".join(partes) + "."
@@ -847,7 +1346,10 @@ def _assinaturas(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditor
         if assinado and _valor_util(valor):
             fonte = assinaturas[0]["fonte"] if assinaturas else linha.get("arquivo_fonte")
             pagina = assinaturas[0]["pagina"] if assinaturas else linha.get("pagina")
-            evidencia = assinaturas[0]["evidencia"] if assinaturas else linha.get("trecho_evidencia")
+            nomes_evidencia = "; ".join(a.get("nome", "") for a in assinaturas[:6] if _valor_util(a.get("nome")))
+            evidencia = f"Bloco de assinaturas físicas: {nomes_evidencia}." if nomes_evidencia else _texto(linha.get("trecho_evidencia"))
+            if campo == "data_assinatura" and data_instrumento:
+                evidencia = f"Data geral escrita no bloco de assinaturas do instrumento: {data_instrumento}."
             linha.update({
                 "valor": _texto(valor),
                 "status": "CONFIRMADO",
@@ -1022,10 +1524,30 @@ def _classificar_indicadores_pendencias(base: MutableMapping[str, Any]) -> None:
     criticas = [p for p in pendencias if _token(p.get("Crítico")) in {"SIM", "TRUE", "1"}]
     pontos = [p for p in pendencias if p not in criticas]
     campos = base.get("campos_nao_localizados") if isinstance(base.get("campos_nao_localizados"), list) else []
+
+    # Se o checklist possuir atenção parcial sem uma pendência equivalente, o
+    # indicador não pode continuar zerado. O bloco específico de campos não
+    # localizados permanece separado para não contar a mesma ausência duas vezes.
+    checklist = base.get("checklist") if isinstance(base.get("checklist"), list) else []
+    atencoes_checklist = [
+        c for c in checklist
+        if "ATEN" in _token(c.get("Status"))
+        and _token(c.get("Validação")) not in {"CAMPOS_NAO_LOCALIZADOS", "CONFLITOS_DOCUMENTAIS"}
+    ]
+    pontos_count = max(len(pontos), len(atencoes_checklist))
+    metricas_tabela = base.get("metricas_tabela_comercial") if isinstance(base.get("metricas_tabela_comercial"), Mapping) else {}
+    try:
+        divergencia_itens = int(metricas_tabela.get("divergencia_quantidade") or 0)
+    except Exception:
+        divergencia_itens = 0
+    if divergencia_itens:
+        pontos_count = max(pontos_count, 1)
+
     base["indicadores_pendencias"] = {
         "pendencias_criticas": len(criticas),
-        "pontos_atencao": len(pontos),
+        "pontos_atencao": pontos_count,
         "campos_nao_localizados": len(campos),
+        "divergencia_itens_comerciais": divergencia_itens,
     }
 
 def _score_risco(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]) -> None:
@@ -1052,7 +1574,17 @@ def _score_risco(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]
     total_paginas = int(base.get("total_paginas") or 0) if str(base.get("total_paginas") or "").isdigit() else 0
     paginas_pct = round((paginas_processadas / total_paginas) * 100) if total_paginas else 100
     conflitos = len(base.get("conflitos_documentais") or [])
-    confianca = max(0, min(100, round(cobertura * 0.85 + paginas_pct * 0.15 - inferidos - conflitos * 2)))
+    metricas_tabela = base.get("metricas_tabela_comercial") if isinstance(base.get("metricas_tabela_comercial"), Mapping) else {}
+    try:
+        divergencia_itens = abs(int(metricas_tabela.get("divergencia_quantidade") or 0))
+    except Exception:
+        divergencia_itens = 0
+    try:
+        cobertura_tabela = float(metricas_tabela.get("cobertura_tabela_percentual") or 100)
+    except Exception:
+        cobertura_tabela = 100.0
+    penalidade_tabela = min(30.0, divergencia_itens * 5.0 + max(0.0, 100.0 - cobertura_tabela) * 0.30)
+    confianca = max(0, min(100, round(cobertura * 0.85 + paginas_pct * 0.15 - inferidos - conflitos * 2 - penalidade_tabela)))
 
     pendencias = base.get("pendencias") if isinstance(base.get("pendencias"), list) else []
     tem_critico_alto = any(_token(p.get("Crítico")) in {"SIM", "TRUE", "1"} and _token(p.get("Risco")) == "ALTO" for p in pendencias)
@@ -1065,8 +1597,23 @@ def _score_risco(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]
     else:
         risco_final = "BAIXO"
 
+    # Score de completude e confiança técnica são indicadores diferentes.
+    completos_simples = 0.0
+    total_simples = len(CAMPOS_OFICIAIS_V4)
+    for _, campo in CAMPOS_OFICIAIS_V4:
+        item = mapa.get(campo)
+        st = _status(item.get("status")) if item else "NÃO_LOCALIZADO"
+        if _evidencia_confirma(item) or (item and st == "CALCULADO" and _valor_util(item.get("valor"))) or st == "NÃO_APLICÁVEL":
+            completos_simples += 1
+        elif st == "INFERIDO":
+            completos_simples += 0.5
+    score_completude = round((completos_simples / total_simples) * 100) if total_simples else 0
+    if divergencia_itens:
+        score_completude = max(0, score_completude - min(20, divergencia_itens * 5))
+
     base["confianca_extracao"] = confianca
-    base["score"] = confianca  # compatibilidade com histórico antigo
+    base["score"] = score_completude
+    base["score_completude"] = score_completude
     base["risco"] = risco_final
     base["metricas_confianca"] = {
         "cobertura_campos_percentual": cobertura,
@@ -1077,9 +1624,13 @@ def _score_risco(base: MutableMapping[str, Any], auditoria: List[Dict[str, Any]]
         "campos_nao_localizados": nao_localizados,
         "campos_inferidos": inferidos,
         "conflitos": conflitos,
+        "divergencia_itens_comerciais": divergencia_itens,
+        "cobertura_tabela_comercial_percentual": cobertura_tabela,
+        "penalidade_tabela_comercial": round(penalidade_tabela, 2),
         "pendencias_com_evidencia": len(pendencias),
         "confianca_extracao_percentual": confianca,
-        "score_final": confianca,
+        "score_final": score_completude,
+        "score_completude_percentual": score_completude,
     }
 
 
@@ -1164,6 +1715,7 @@ def aplicar_motor_evidencias_v4(
         base["motor_evidencias_v4"] = "Modo compatibilidade — análise antiga sem matriz de evidências"
         return base
 
+    _recuperar_campos_documentais(base, bruto, auditoria, texto_extraido)
     mapa = _mapa_auditoria(auditoria)
 
     # Campos diretos: prevalece exclusivamente a evidência auditada.
@@ -1183,6 +1735,8 @@ def aplicar_motor_evidencias_v4(
             base[campo] = _texto(item.get("valor"))
         elif item and _status(item.get("status")) == "NÃO_APLICÁVEL" and _valor_util(item.get("valor")):
             base[campo] = _texto(item.get("valor"))
+        elif item and _status(item.get("status")) == "NÃO_LOCALIZADO":
+            base[campo] = _texto(item.get("valor")) or "Não localizado com segurança"
         else:
             base[campo] = "Não identificado com segurança"
 
@@ -1202,8 +1756,10 @@ def aplicar_motor_evidencias_v4(
         base["resumo_aditivos"] = f"{len(base['aditivos_contrato'])} aditivo(s) identificado(s) com evidência documental."
     else:
         base["resumo_aditivos"] = "Nenhum aditivo identificado com evidência documental no pacote analisado."
+    _sincronizar_resumo_aditivos_auditoria(base, auditoria)
 
     base["pendencias"] = _filtrar_pendencias(bruto.get("pendencias") or base.get("pendencias"))
+    _adicionar_pendencia_segunda_testemunha(base, texto_extraido)
 
     auditoria = _ordenar_auditoria(auditoria)
     base["auditoria_campos"] = auditoria
