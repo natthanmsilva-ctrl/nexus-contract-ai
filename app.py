@@ -9177,6 +9177,8 @@ def inject_professional_page_css(page: str) -> None:
     .ai-consult-shell p{margin:0 0 14px;color:#9ba9b8;font-size:12px;font-weight:700;}
     .ai-quick-label{color:#d7bf75;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.10em;margin:17px 0 9px;}
     .ai-input-note{margin:10px 0 0;color:#8fa0b2;font-size:11px;font-weight:750;}
+    .ai-manual-label{color:#d7bf75;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.09em;margin:14px 0 8px;}
+    .ai-quick-label{margin-top:16px!important;margin-bottom:9px!important;}
     .ai-guide-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:15px 0;}
     .ai-guide-card{padding:18px;border-radius:17px;background:linear-gradient(145deg,rgba(17,29,41,.96),rgba(9,17,25,.96));border:1px solid rgba(215,191,117,.16);}
     .ai-guide-card b{display:block;color:#fff;font-size:15px;margin-bottom:7px;}
@@ -9604,6 +9606,34 @@ if pagina == "🤖 Assistente IA":
 
         df["valor_num"] = df["valor_total"].apply(_valor_num_chat)
         df["data_dt"] = pd.to_datetime(df["data_analise"], errors="coerce", dayfirst=True)
+
+        # Campos derivados do JSON completo: ampliam as consultas rápidas sem
+        # inventar informações que não estejam registradas no histórico.
+        payloads = df.apply(_hist_parse_resultado_json, axis=1)
+
+        def _lista_count(payload: Any, chave: str) -> int:
+            valor = payload.get(chave, []) if isinstance(payload, dict) else []
+            return len(valor) if isinstance(valor, list) else 0
+
+        def _payload_text(payload: Any, chaves: List[str], padrao: str = "Não informado") -> str:
+            if not isinstance(payload, dict):
+                return padrao
+            for chave in chaves:
+                valor = payload.get(chave)
+                texto = clean_text(valor).strip() if valor is not None else ""
+                if texto and texto.lower() not in {"não localizado", "não localizada", "não informado", "none", "nan"}:
+                    return texto
+            return padrao
+
+        df["qtd_pendencias"] = payloads.apply(lambda p: _lista_count(p, "pendencias"))
+        df["qtd_aditivos"] = payloads.apply(lambda p: _lista_count(p, "aditivos_contrato"))
+        df["qtd_itens"] = payloads.apply(lambda p: _lista_count(p, "itens_contrato"))
+        df["condicao_pagamento_dias"] = payloads.apply(
+            lambda p: _payload_text(p, ["condicao_pagamento_dias", "condicao_de_pagamento_em_dias"])
+        )
+        df["local_prestacao"] = payloads.apply(
+            lambda p: _payload_text(p, ["local_prestacao_contraparte", "local_prestacao", "local"])
+        )
         return df
 
     def _compactar_chat(valor: Any, limite: int = 180) -> str:
@@ -9649,6 +9679,7 @@ if pagina == "🤖 Assistente IA":
 
     def _limpar_consulta_ia() -> None:
         st.session_state["assistente_pergunta_input"] = ""
+        st.session_state["assistente_pergunta_rapida"] = "Selecione uma pergunta rápida..."
         st.session_state.pop("assistente_ultima_pergunta", None)
 
     st.markdown(
@@ -9662,41 +9693,56 @@ if pagina == "🤖 Assistente IA":
     )
 
     st.markdown('<div class="ai-quick-label">Perguntas rápidas</div>', unsafe_allow_html=True)
-    q1, q2, q3, q4 = st.columns(4)
-    q1.button(
-        "🚨 Contratos de risco alto",
-        use_container_width=True,
-        key="ai_quick_risco_alto",
-        on_click=_definir_pergunta_rapida,
-        args=("Quais contratos são de risco alto?",),
-    )
-    q2.button(
-        "📉 Contrato com menor score",
-        use_container_width=True,
-        key="ai_quick_menor_score",
-        on_click=_definir_pergunta_rapida,
-        args=("Qual contrato tem menor score?",),
-    )
-    q3.button(
-        "✍️ Contratos não assinados",
-        use_container_width=True,
-        key="ai_quick_nao_assinados",
-        on_click=_definir_pergunta_rapida,
-        args=("Quais contratos não estão assinados?",),
-    )
-    q4.button(
-        "🕘 Últimos contratos",
-        use_container_width=True,
-        key="ai_quick_ultimos",
-        on_click=_definir_pergunta_rapida,
-        args=("Liste os últimos contratos analisados",),
+
+    perguntas_rapidas = [
+        "Quantos contratos existem no histórico?",
+        "Liste os últimos contratos analisados",
+        "Quais contratos são de risco alto?",
+        "Quais contratos são de risco médio?",
+        "Quais contratos são de risco baixo?",
+        "Qual contrato tem o menor score?",
+        "Qual contrato tem o maior score?",
+        "Qual é o score médio dos contratos?",
+        "Qual contrato possui o maior valor?",
+        "Qual contrato possui o menor valor?",
+        "Quais contratos não possuem valor global fixo?",
+        "Quais contratos possuem valor global fixo?",
+        "Quais contratos estão assinados?",
+        "Quais contratos não estão assinados?",
+        "Quais contratos são do Projuris?",
+        "Quais contratos são do Ariba?",
+        "Quais contratos foram analisados pelo Gemini?",
+        "Quais contratos estão vigentes?",
+        "Quais contratos estão vencidos ou encerrados?",
+        "Quais contratos possuem prazo indeterminado?",
+        "Quais contratos possuem pendências?",
+        "Quais contratos possuem aditivos?",
+        "Quais contratos possuem materiais ou serviços identificados?",
+        "Quais contratos possuem condição de pagamento em dias?",
+        "Quais contratos têm local de prestação não localizado ou não aplicável?",
+    ]
+    placeholder_rapido = "Selecione uma pergunta rápida..."
+
+    def _aplicar_pergunta_rapida_select() -> None:
+        selecionada = str(st.session_state.get("assistente_pergunta_rapida", "")).strip()
+        if selecionada and selecionada != placeholder_rapido:
+            st.session_state["assistente_pergunta_input"] = selecionada
+            st.session_state["assistente_ultima_pergunta"] = selecionada
+
+    st.selectbox(
+        "Escolha uma pergunta rápida",
+        [placeholder_rapido] + perguntas_rapidas,
+        key="assistente_pergunta_rapida",
+        on_change=_aplicar_pergunta_rapida_select,
+        label_visibility="collapsed",
     )
 
+    st.markdown('<div class="ai-manual-label">Consulta personalizada</div>', unsafe_allow_html=True)
     pergunta_col, consultar_col, limpar_col = st.columns([4.8, 1, 1])
     with pergunta_col:
         st.text_input(
             "Pergunta",
-            placeholder="Ex.: Quais contratos são do Projuris? Qual possui menor score?",
+            placeholder="Digite contraparte, CNPJ, risco, score, assinatura, origem, status, arquivo ou modelo...",
             key="assistente_pergunta_input",
             label_visibility="collapsed",
         )
@@ -9834,8 +9880,14 @@ if pagina == "🤖 Assistente IA":
                 'Refine a pergunta para reduzir a lista.</div>'
             )
 
+        html_cards = "\n".join(
+            linha.strip()
+            for bloco in cards
+            for linha in bloco.splitlines()
+            if linha.strip()
+        )
         st.markdown(
-            f'<div class="ai-contract-list">{"".join(cards)}</div>{complemento}',
+            f'<div class="ai-contract-list">{html_cards}</div>{complemento}',
             unsafe_allow_html=True,
         )
 
@@ -10010,6 +10062,96 @@ if pagina == "🤖 Assistente IA":
                         .str.lower()
                         .str.contains("gemini", na=False)
                     ],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["não possuem valor global fixo", "nao possuem valor global fixo", "sem valor global fixo"],
+            ):
+                valores = df["valor_total"].astype(str).str.lower()
+                _render_conjunto_ia(
+                    "Contratos sem valor global fixo",
+                    df[valores.str.contains("sem valor global fixo", na=False) | (df["valor_num"] <= 0)],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["possuem valor global fixo", "com valor global fixo", "valor global confirmado"],
+            ):
+                valores = df["valor_total"].astype(str).str.lower()
+                _render_conjunto_ia(
+                    "Contratos com valor global fixo",
+                    df[(df["valor_num"] > 0) & ~valores.str.contains("sem valor global fixo", na=False)],
+                    limite=25,
+                )
+            elif texto_tem(pergunta_lower, ["estão vigentes", "estao vigentes", "contratos vigentes"]):
+                status_vigente = (
+                    df["status"].astype(str).str.lower().str.contains("vigente|ativo", na=False, regex=True)
+                    | df["vigencia"].astype(str).str.lower().str.contains("vigente", na=False)
+                )
+                _render_conjunto_ia("Contratos vigentes", df[status_vigente], limite=25)
+            elif texto_tem(
+                pergunta_lower,
+                ["vencidos ou encerrados", "contratos vencidos", "contratos encerrados", "estão vencidos", "estao vencidos"],
+            ):
+                status_encerrado = df["status"].astype(str).str.lower().str.contains(
+                    "vencido|encerrado|inativo|rescindido|finalizado", na=False, regex=True
+                )
+                _render_conjunto_ia("Contratos vencidos ou encerrados", df[status_encerrado], limite=25)
+            elif texto_tem(
+                pergunta_lower,
+                ["prazo indeterminado", "vigência indeterminada", "vigencia indeterminada"],
+            ):
+                prazo_indeterminado = (
+                    df["status"].astype(str).str.lower().str.contains("indeterminado", na=False)
+                    | df["vigencia"].astype(str).str.lower().str.contains("indeterminado|31/12/9999", na=False, regex=True)
+                )
+                _render_conjunto_ia("Contratos com prazo indeterminado", df[prazo_indeterminado], limite=25)
+            elif texto_tem(pergunta_lower, ["possuem pendências", "possuem pendencias", "com pendências", "com pendencias"]):
+                _render_conjunto_ia(
+                    "Contratos com pendências",
+                    df[df["qtd_pendencias"] > 0],
+                    limite=25,
+                )
+            elif texto_tem(pergunta_lower, ["possuem aditivos", "com aditivos", "contratos com aditivo"]):
+                _render_conjunto_ia(
+                    "Contratos com aditivos",
+                    df[df["qtd_aditivos"] > 0],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["materiais ou serviços identificados", "materiais ou servicos identificados", "possuem materiais", "possuem serviços", "possuem servicos"],
+            ):
+                _render_conjunto_ia(
+                    "Contratos com materiais ou serviços identificados",
+                    df[df["qtd_itens"] > 0],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["condição de pagamento em dias", "condicao de pagamento em dias", "pagamento em dias"],
+            ):
+                pagamento = df["condicao_pagamento_dias"].astype(str).str.lower().str.strip()
+                validos = ~pagamento.isin(["", "não informado", "nao informado", "não localizado", "nao localizado", "none", "nan"])
+                _render_conjunto_ia(
+                    "Contratos com condição de pagamento em dias",
+                    df[validos],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["local de prestação não localizado", "local de prestacao nao localizado", "local de prestação não aplicável", "local de prestacao nao aplicavel"],
+            ):
+                local = df["local_prestacao"].astype(str).str.lower()
+                sem_local = local.str.contains(
+                    "não informado|nao informado|não localizado|nao localizado|não identificado|nao identificado|não aplicável|nao aplicavel",
+                    na=False,
+                    regex=True,
+                )
+                _render_conjunto_ia(
+                    "Contratos sem local de prestação definido",
+                    df[sem_local],
                     limite=25,
                 )
             elif texto_tem(
@@ -10513,7 +10655,7 @@ if pagina == "📚 Histórico":
             score_min, score_max = st.slider("Faixa de score", 0, 100, (0, 100), key="hist_score")
 
     def _limpar_filtros_historico() -> None:
-        for chave in ["hist_busca", "hist_risco", "hist_assinatura", "hist_ordenar", "hist_origem", "hist_modelo", "hist_status", "hist_score", "hist_contrato_detalhado"]:
+        for chave in ["hist_busca", "hist_risco", "hist_assinatura", "hist_ordenar", "hist_origem", "hist_modelo", "hist_status", "hist_score", "hist_card_aberto"]:
             st.session_state.pop(chave, None)
 
     reset_col, _ = st.columns([1, 4])
@@ -10648,71 +10790,48 @@ if pagina == "📚 Histórico":
         tab_cards, tab_tabela, tab_auditoria = st.tabs(["📌 Cards executivos", "📋 Tabela executiva", "🧾 Auditoria técnica"])
         with tab_cards:
             cards_df = filtrado.head(25).copy()
-            opcoes_detalhe = ["Não abrir análise completa"]
-            mapa_detalhe: Dict[str, int] = {}
 
-            for idx_card, (_, row_card) in enumerate(cards_df.iterrows()):
-                label = (
-                    f"ID {clean_text(row_card.get('id'))} • "
-                    f"{clean_text(row_card.get('fornecedor'))} • "
-                    f"{clean_text(row_card.get('data_analise'))}"
+            def _alternar_card_historico(chave_card: str) -> None:
+                """Abre somente o contrato clicado e mantém o detalhe sob o próprio card."""
+                atual = str(st.session_state.get("hist_card_aberto", ""))
+                if atual == chave_card:
+                    st.session_state.pop("hist_card_aberto", None)
+                else:
+                    st.session_state["hist_card_aberto"] = chave_card
+
+            chaves_visiveis: List[str] = []
+            for idx_card, (_, row) in enumerate(cards_df.iterrows()):
+                id_registro = clean_text(row.get("id"))
+                chave_card = f"{id_registro or 'sem_id'}::{idx_card}"
+                chaves_visiveis.append(chave_card)
+
+                st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
+
+                card_aberto = str(st.session_state.get("hist_card_aberto", "")) == chave_card
+                st.button(
+                    "✖ Fechar análise completa" if card_aberto else "🔎 Abrir análise completa deste contrato",
+                    use_container_width=True,
+                    key=f"hist_abrir_card_{id_registro or 'sem_id'}_{idx_card}",
+                    on_click=_alternar_card_historico,
+                    args=(chave_card,),
                 )
-                opcoes_detalhe.append(label)
-                mapa_detalhe[label] = idx_card
 
-            def _solicitar_abertura_historico(label_selecionado: str) -> None:
-                # O botão do card grava uma solicitação. A seleção é aplicada
-                # no início do próximo rerun, antes de o selectbox ser criado.
-                st.session_state["hist_detalhe_pendente"] = label_selecionado
-
-            detalhe_pendente = st.session_state.pop("hist_detalhe_pendente", None)
-            if detalhe_pendente in opcoes_detalhe:
-                st.session_state["hist_contrato_detalhado"] = detalhe_pendente
-
-            detalhe_atual = st.session_state.get(
-                "hist_contrato_detalhado",
-                "Não abrir análise completa",
-            )
-            if detalhe_atual not in opcoes_detalhe:
-                st.session_state["hist_contrato_detalhado"] = "Não abrir análise completa"
-
-            detalhe_escolhido = st.selectbox(
-                "Abrir análise completa",
-                opcoes_detalhe,
-                key="hist_contrato_detalhado",
-                help="Selecione um contrato ou use o botão existente em cada card.",
-            )
-
-            if detalhe_escolhido != "Não abrir análise completa":
-                posicao = mapa_detalhe.get(detalhe_escolhido)
-                if posicao is not None:
-                    row_detalhe = cards_df.iloc[posicao]
+                # O resultado completo nasce exatamente aqui: abaixo do card acionado.
+                if card_aberto:
                     st.markdown(
                         '<div class="history-selected-shell">'
-                        '<h3>Análise completa selecionada</h3>'
-                        '<p>O detalhamento do contrato escolhido está aberto abaixo. '
-                        'Use o seletor acima para trocar de registro.</p>'
+                        '<h3>Análise completa deste contrato</h3>'
+                        '<p>O detalhamento abaixo pertence ao card selecionado. '
+                        'Use o botão acima para fechar ou abra outro contrato.</p>'
                         '</div>',
                         unsafe_allow_html=True,
                     )
-                    render_analise_completa_historico(row_detalhe)
+                    render_analise_completa_historico(row)
 
-            st.markdown(
-                '<div class="mgmt-section-head"><div><h2>Cards encontrados</h2>'
-                '<p>Resumo executivo de cada análise filtrada.</p></div></div>',
-                unsafe_allow_html=True,
-            )
-
-            for idx_card, (_, row) in enumerate(cards_df.iterrows()):
-                label_card = opcoes_detalhe[idx_card + 1]
-                st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
-                st.button(
-                    "🔎 Abrir análise completa deste contrato",
-                    use_container_width=True,
-                    key=f"hist_abrir_card_{clean_text(row.get('id'))}_{idx_card}",
-                    on_click=_solicitar_abertura_historico,
-                    args=(label_card,),
-                )
+            # Se um filtro remover o card que estava aberto, elimina a seleção antiga.
+            card_em_estado = str(st.session_state.get("hist_card_aberto", ""))
+            if card_em_estado and card_em_estado not in chaves_visiveis:
+                st.session_state.pop("hist_card_aberto", None)
 
             if len(filtrado) > 25:
                 st.info(
