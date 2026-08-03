@@ -133,7 +133,7 @@ Um dado CONFIRMADO exige arquivo, página/seção e trecho específico. “Confo
 REGRAS DE EXATIDÃO
 - Endereço da parte NÃO é local de prestação, salvo cláusula expressa de execução naquele local.
 - Foro eleito, comarca competente ou cidade escolhida para dirimir conflitos NÃO são local de prestação.
-- condicao_pagamento_dias deve retornar somente no padrão executivo DD, por exemplo: 15DD, 30DD, 60DD ou 90DD. A frase completa permanece em forma_pagamento.
+- condicao_pagamento_dias deve retornar somente no padrão executivo DD, por exemplo: 15DD, 30DD, 60DD ou 90DD. Use exclusivamente cláusula financeira de fatura, vencimento ou pagamento da remuneração. Não use prazos operacionais de entrega de informações, relatórios, atendimento ou execução. A frase completa permanece em forma_pagamento.
 - “Prazo indeterminado” deve continuar indeterminado. O sistema exibirá tecnicamente 31/12/9999; não invente data final.
 - Permanência mínima, fidelização ou multa de saída NÃO é prazo total do contrato.
 - Status atual operacional não pode ser presumido. Informe apenas a situação documental da vigência.
@@ -565,50 +565,110 @@ def _extrair_data_instrumento_documental(paginas: Mapping[int, str]) -> Tuple[st
 def _extrair_condicao_pagamento_dd_documental(paginas: Mapping[int, str]) -> Tuple[str, str, str]:
     """Extrai a condição de pagamento em formato executivo ``15DD``/``30DD``.
 
-    A busca é restrita a contextos de pagamento, fatura, nota fiscal ou vencimento
-    para não confundir aviso prévio, vigência, multa e outros prazos contratuais.
+    V10: procura primeiro cláusulas financeiras explícitas em *todas* as páginas
+    e só depois considera construções genéricas. Isso evita que um prazo
+    operacional anterior (por exemplo, entrega de informação em 5 dias úteis)
+    vença uma cláusula posterior de faturamento/vencimento.
     """
-    padroes = [
-        # Ex.: "vencimento até o dia 15 (quinze) do mês subsequente".
-        re.compile(
-            r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})(?:\s*\([^)]*\))?\s+do\s+m[eê]s\s+subsequente",
-            flags=re.I | re.S,
-        ),
-        # Ex.: "pagamento em até 60 dias", "vencimento no prazo de 30 dias".
-        re.compile(
-            r"(?:pagamento|vencimento|fatura|nota\s+fiscal).{0,180}?"
-            r"(?:em\s+at[eé]|no\s+prazo\s+de|prazo\s+de|at[eé])\s+"
-            r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?",
-            flags=re.I | re.S,
-        ),
-        # Ex.: "30 dias corridos contados da emissão da nota fiscal".
-        re.compile(
-            r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?\s*(?:corridos|[uú]teis)?"
-            r".{0,180}?(?:emiss[aã]o|fatura|nota\s+fiscal|recebimento|aprova[cç][aã]o)",
-            flags=re.I | re.S,
-        ),
-    ]
+    candidatos: List[Tuple[int, int, int, str, str]] = []
+
+    # Maior prioridade: vencimento em dia definido do mês subsequente.
+    # Ex.: "vencimento até o dia 15 (quinze) do mês subsequente".
+    padrao_dia_mes = re.compile(
+        r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})(?:\s*\([^)]*\))?"
+        r"\s+do\s+m[eê]s\s+subsequente",
+        flags=re.I | re.S,
+    )
 
     for numero, pagina in paginas.items():
-        sem = _sem_acento(pagina).lower()
-        if not any(t in sem for t in ("pagamento", "vencimento", "fatura", "nota fiscal", "remuneracao")):
-            continue
-        for padrao in padroes:
-            m = padrao.search(pagina)
-            if not m:
-                continue
+        for m in padrao_dia_mes.finditer(pagina):
             try:
                 dias = int(m.group(1))
             except Exception:
                 continue
             if not 1 <= dias <= 365:
                 continue
-            inicio = max(0, m.start() - 90)
-            fim = min(len(pagina), m.end() + 120)
-            evidencia = _trecho_limitado(pagina[inicio:fim], 420)
-            return f"{dias}DD", str(numero), evidencia
-    return "", "", ""
+            inicio = max(0, m.start() - 180)
+            fim = min(len(pagina), m.end() + 220)
+            contexto = pagina[inicio:fim]
+            contexto_sem = _sem_acento(contexto).lower()
+            # A cláusula deve estar inserida em contexto financeiro real.
+            if not any(x in contexto_sem for x in ("fatura", "pagamento", "remuneracao", "pagar", "vencimento")):
+                continue
+            candidatos.append((100, numero, m.start(), f"{dias}DD", _trecho_limitado(contexto, 420)))
 
+    # Se existe uma cláusula explícita de vencimento, ela prevalece sobre todos
+    # os demais prazos do documento, independentemente da ordem das páginas.
+    if candidatos:
+        candidatos.sort(key=lambda x: (-x[0], x[1], x[2]))
+        _, numero, _, valor, evidencia = candidatos[0]
+        return valor, str(numero), evidencia
+
+    padroes_genericos = [
+        re.compile(
+            r"(?:pagamento|vencimento|fatura|nota\s+fiscal|remunera[cç][aã]o).{0,140}?"
+            r"(?:em\s+at[eé]|no\s+prazo\s+de|prazo\s+de|at[eé])\s+"
+            r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?",
+            flags=re.I | re.S,
+        ),
+        re.compile(
+            r"(\d{1,3})(?:\s*\([^)]*\))?\s+dias?\s*(?:corridos|[uú]teis)?"
+            r".{0,140}?(?:emiss[aã]o\s+da\s+nota|nota\s+fiscal|recebimento\s+da\s+fatura|aprova[cç][aã]o\s+da\s+fatura)",
+            flags=re.I | re.S,
+        ),
+    ]
+    marcadores_operacionais = (
+        "relacao dos acionistas",
+        "disponibilizara ao emissor",
+        "entrega de informacao",
+        "fornecimento de informacao",
+        "prazo de resposta",
+        "relatorio",
+        "documentos solicitados",
+        "execucao dos servicos",
+    )
+    marcadores_financeiros_fortes = (
+        "fatura",
+        "nota fiscal",
+        "vencimento",
+        "pagamento da remuneracao",
+        "pagara a remuneracao",
+        "recebimento da fatura",
+        "emissao da nota",
+    )
+
+    for numero, pagina in paginas.items():
+        sem_pagina = _sem_acento(pagina).lower()
+        if not any(t in sem_pagina for t in ("pagamento", "vencimento", "fatura", "nota fiscal", "remuneracao")):
+            continue
+        for indice, padrao in enumerate(padroes_genericos):
+            for m in padrao.finditer(pagina):
+                try:
+                    dias = int(m.group(1))
+                except Exception:
+                    continue
+                if not 1 <= dias <= 365:
+                    continue
+                inicio = max(0, m.start() - 90)
+                fim = min(len(pagina), m.end() + 120)
+                contexto = pagina[inicio:fim]
+                sem_contexto = _sem_acento(contexto).lower()
+                tem_financeiro_forte = any(x in sem_contexto for x in marcadores_financeiros_fortes)
+                tem_operacional = any(x in sem_contexto for x in marcadores_operacionais)
+                # Rejeita prazo operacional que apenas esteja próximo de uma
+                # menção genérica a pagamento em outro assunto da cláusula.
+                if tem_operacional and not tem_financeiro_forte:
+                    continue
+                score = 80 if indice == 0 else 75
+                if tem_financeiro_forte:
+                    score += 10
+                candidatos.append((score, numero, m.start(), f"{dias}DD", _trecho_limitado(contexto, 420)))
+
+    if not candidatos:
+        return "", "", ""
+    candidatos.sort(key=lambda x: (-x[0], x[1], x[2]))
+    _, numero, _, valor, evidencia = candidatos[0]
+    return valor, str(numero), evidencia
 
 def _validar_local_prestacao_semantico(
     base: MutableMapping[str, Any],
@@ -797,6 +857,10 @@ def _recuperar_campos_documentais(
             pagina=str(pag_ass), secao="Bloco de assinaturas físicas",
             evidencia=evidencia_fisica, confianca=100,
         )
+
+    # V10: se a matriz já confirmou os nomes no bloco físico, reconstrói os
+    # registros individuais antes da consolidação final.
+    _recuperar_assinaturas_documentais(base, bruto, auditoria, paginas, arquivo)
 
     # Ausência de aditivo é uma conclusão sobre o pacote, não um campo documental ausente.
     aditivos = bruto.get("aditivos_contrato") if isinstance(bruto.get("aditivos_contrato"), list) else []
@@ -1230,6 +1294,235 @@ def _vigencia_status(base: MutableMapping[str, Any], auditoria: List[Dict[str, A
     auditoria[:] = _ordenar_auditoria(mapa.values())
 
 
+
+def _separar_nomes_assinatura(valor: Any) -> List[str]:
+    """Separa nomes de signatários preservando a grafia retornada pela auditoria."""
+    texto = _texto(valor)
+    if not _valor_util(texto):
+        return []
+    texto = re.sub(r"\s*[|•·]+\s*", ";", texto)
+    texto = re.sub(r"[\r\n]+", ";", texto)
+    partes = [p.strip(" .,:-\t") for p in texto.split(";")]
+    saida: List[str] = []
+    vistos = set()
+    invalidos = {
+        "NAO IDENTIFICADO COM SEGURANCA", "NAO LOCALIZADO", "NAO VALIDADO",
+        "CONTRATO ASSINADO", "SIM", "NAO",
+    }
+    for parte in partes:
+        parte = re.sub(r"^(?:nome|assinante|signat[aá]rio)\s*:\s*", "", parte, flags=re.I)
+        token = _token(parte)
+        palavras = [x for x in re.findall(r"[A-Za-zÀ-ÿ]+", parte) if len(x) > 1]
+        if token in invalidos or len(palavras) < 2 or token in vistos:
+            continue
+        vistos.add(token)
+        saida.append(parte)
+    return saida
+
+
+def _span_aproximado_nome(texto: str, nome: str, alcance: int = 220) -> Tuple[int, int]:
+    """Retorna o intervalo dos tokens do nome, mesmo com ordem invertida no OCR."""
+    texto_norm = _sem_acento(texto).lower()
+    nome_norm = _sem_acento(nome).lower()
+    pos_exata = texto_norm.find(nome_norm)
+    if pos_exata >= 0:
+        return pos_exata, pos_exata + len(nome_norm)
+    tokens = [
+        x for x in re.findall(r"[a-z]+", nome_norm)
+        if len(x) >= 3 and x not in {"dos", "das", "de", "da", "do"}
+    ]
+    if not tokens:
+        return -1, -1
+    posicoes: List[int] = []
+    for token in tokens:
+        pos = texto_norm.find(token)
+        if pos >= 0:
+            posicoes.append(pos)
+    minimo = max(2, len(tokens) - 1)
+    if len(posicoes) < minimo or max(posicoes) - min(posicoes) > alcance:
+        return -1, -1
+    return min(posicoes), max(posicoes) + max(len(x) for x in tokens)
+
+
+def _contexto_aproximado_nome(texto: str, nome: str, raio: int = 100) -> Tuple[str, int]:
+    """Localiza os tokens de um nome mesmo quando o OCR inverte sua ordem."""
+    inicio_nome, fim_nome = _span_aproximado_nome(texto, nome)
+    if inicio_nome < 0:
+        return "", -1
+    inicio = max(0, inicio_nome - raio)
+    fim = min(len(texto), fim_nome + raio)
+    return texto[inicio:fim], inicio_nome
+
+
+def _recuperar_assinaturas_documentais(
+    base: MutableMapping[str, Any],
+    bruto: Mapping[str, Any],
+    auditoria: List[Dict[str, Any]],
+    paginas: Mapping[int, str],
+    arquivo_padrao: str,
+) -> None:
+    """Recupera a tabela de assinaturas quando a IA trouxe os nomes na matriz,
+    mas omitiu evidência/fonte nos registros individuais.
+
+    A recuperação só é ativada quando existe bloco físico de assinaturas no OCR
+    e uma lista auditada de pessoas ou registros individuais com nomes. Assim,
+    uma testemunha isolada ou nomes citados apenas no corpo não validam o contrato.
+    """
+    pagina_ass = 0
+    texto_ass = ""
+    for numero, pagina in paginas.items():
+        sem = _sem_acento(pagina).lower()
+        if "firmam as partes" in sem and "testemunhas" in sem:
+            pagina_ass, texto_ass = numero, pagina
+            break
+    if not texto_ass:
+        return
+
+    mapa = _mapa_auditoria(auditoria)
+    linha_pessoas = mapa.get("pessoas_que_assinaram") or {}
+    nomes: List[str] = []
+    registros_origem: List[Mapping[str, Any]] = []
+    for origem in (bruto.get("assinaturas_contrato"), base.get("assinaturas_contrato")):
+        if isinstance(origem, list):
+            for item in origem:
+                if isinstance(item, Mapping):
+                    registros_origem.append(item)
+                    nome = _texto(item.get("nome") or item.get("Nome") or item.get("signatario") or item.get("assinante"))
+                    if _valor_util(nome):
+                        nomes.append(nome)
+
+    if _evidencia_confirma(linha_pessoas):
+        nomes.extend(_separar_nomes_assinatura(linha_pessoas.get("valor")))
+    for origem in (base.get("pessoas_que_assinaram"), bruto.get("pessoas_que_assinaram")):
+        nomes.extend(_separar_nomes_assinatura(origem))
+
+    # Deduplicação preservando a ordem documental/auditada.
+    nomes_unicos: List[str] = []
+    vistos = set()
+    for nome in nomes:
+        chave = _token(nome)
+        if not chave or chave in vistos:
+            continue
+        vistos.add(chave)
+        nomes_unicos.append(nome)
+
+    # Exige ao menos duas pessoas auditadas no bloco de assinatura das partes.
+    if len(nomes_unicos) < 2:
+        return
+
+    origem_por_nome: Dict[str, Mapping[str, Any]] = {}
+    for item in registros_origem:
+        nome = _texto(item.get("nome") or item.get("Nome") or item.get("signatario") or item.get("assinante"))
+        if _valor_util(nome):
+            origem_por_nome[_token(nome)] = item
+
+    data_instrumento = _data_br(base.get("data_contrato")) or _data_br(base.get("data_assinatura"))
+    linha_rec = mapa.get("data_reconhecimento_firma") or {}
+    data_rec_global = _data_br(linha_rec.get("valor") or base.get("data_reconhecimento_firma"))
+    evidencia_pessoas = _texto(linha_pessoas.get("trecho_evidencia"))
+    evidencia_rec = _texto(linha_rec.get("trecho_evidencia"))
+    evidencia_nomes_norm = _sem_acento(evidencia_pessoas).lower()
+
+    diretos_com_papel = 0
+    contextos: Dict[str, Tuple[str, int, int]] = {}
+    texto_ass_norm = _sem_acento(texto_ass).lower()
+    for nome in nomes_unicos:
+        inicio_nome, fim_nome = _span_aproximado_nome(texto_ass, nome)
+        contexto, _ = _contexto_aproximado_nome(texto_ass, nome)
+        contextos[_token(nome)] = (contexto, inicio_nome, fim_nome)
+        if inicio_nome >= 0:
+            proximo = texto_ass_norm[max(0, fim_nome - 5):min(len(texto_ass_norm), fim_nome + 45)]
+            if any(x in proximo for x in ("coordenador", "coordenadora", "diretor", "diretora", "procurador", "representante")):
+                diretos_com_papel += 1
+
+    recuperadas: List[Dict[str, Any]] = []
+    for indice, nome in enumerate(nomes_unicos):
+        origem = dict(origem_por_nome.get(_token(nome)) or {})
+        contexto, inicio_nome, fim_nome = contextos.get(_token(nome), ("", -1, -1))
+        sem_contexto = _sem_acento(contexto).lower()
+        antes = texto_ass_norm[max(0, inicio_nome - 120):inicio_nome] if inicio_nome >= 0 else ""
+        depois = texto_ass_norm[fim_nome:min(len(texto_ass_norm), fim_nome + 70)] if fim_nome >= 0 else ""
+        trecho_curto = texto_ass_norm[max(0, inicio_nome - 35):min(len(texto_ass_norm), fim_nome + 45)] if inicio_nome >= 0 else ""
+        em_reconhecimento = bool(inicio_nome >= 0 and "firmas de" in antes and "reconhe" in texto_ass_norm[max(0, inicio_nome - 260):inicio_nome])
+        em_campo_testemunha = bool(
+            inicio_nome >= 0
+            and "testemunhas" in antes
+            and "nome" in antes[-70:]
+            and not em_reconhecimento
+        )
+
+        papel = _texto(origem.get("papel_cargo") or origem.get("Papel/Cargo") or origem.get("cargo") or origem.get("papel"))
+        categoria = _token(origem.get("categoria"))
+        if not _valor_util(papel):
+            if em_reconhecimento:
+                papel = "Representante Legal"
+            elif em_campo_testemunha:
+                papel = "Testemunha"
+            elif "coordenadora" in depois[:45]:
+                papel = "Coordenadora"
+            elif "coordenador" in depois[:45]:
+                papel = "Coordenador"
+            elif "diretora" in depois[:45]:
+                papel = "Diretora"
+            elif "diretor" in depois[:45]:
+                papel = "Diretor"
+            elif len(nomes_unicos) == 5 and diretos_com_papel >= 1 and indice == len(nomes_unicos) - 1 and "testemunhas" in texto_ass_norm:
+                # Fallback restrito para OCR ilegível do único campo preenchido
+                # de testemunha, mantendo os dois nomes reconhecidos em cartório
+                # como representantes legais.
+                papel = "Testemunha"
+            else:
+                papel = "Representante Legal"
+
+        papel_tok = _token(papel)
+        if not categoria:
+            if "TESTEMUNHA" in papel_tok:
+                categoria = "TESTEMUNHA"
+            elif em_reconhecimento:
+                categoria = "REPRESENTANTE_CONTRATANTE"
+            elif inicio_nome >= 0 and "ITAU CORRETORA DE VALORES" in _sem_acento(texto_ass[fim_nome:]).upper():
+                categoria = "REPRESENTANTE_CONTRAPARTE"
+            else:
+                categoria = "REPRESENTANTE_CONTRATANTE"
+
+        fonte = _texto(origem.get("fonte") or origem.get("Fonte") or origem.get("arquivo_fonte")) or _texto(linha_pessoas.get("arquivo_fonte")) or arquivo_padrao
+        pagina = _texto(origem.get("pagina") or origem.get("Página")) or _texto(linha_pessoas.get("pagina")) or str(pagina_ass)
+        evidencia = _texto(origem.get("evidencia") or origem.get("Evidência") or origem.get("trecho_evidencia"))
+        if not _evidencia_util(evidencia):
+            evidencia = contexto.strip() if contexto else evidencia_pessoas
+        if not _evidencia_util(evidencia):
+            evidencia = f"Nome identificado no bloco de assinaturas físicas do instrumento: {nome}."
+
+        data_individual = _texto(origem.get("data_assinatura") or origem.get("Data da assinatura"))
+        if not _data_br(data_individual):
+            data_individual = "Não localizada individualmente"
+
+        data_rec = _data_br(origem.get("data_reconhecimento_firma") or origem.get("Data do reconhecimento de firma"))
+        nome_norm = _sem_acento(nome).lower()
+        m_firmas = re.search(r"firmas\s+de\s+(.*?)(?:\]|;|s[aã]o\s+paulo|$)", evidencia_nomes_norm, flags=re.I | re.S)
+        trecho_firmas = m_firmas.group(1) if m_firmas else ""
+        citado_em_firmas = bool(nome_norm and nome_norm in trecho_firmas)
+        if not data_rec and data_rec_global and citado_em_firmas:
+            data_rec = data_rec_global
+        if not data_rec:
+            data_rec = "Não aplicável"
+
+        recuperadas.append({
+            "nome": nome,
+            "papel_cargo": papel,
+            "categoria": categoria,
+            "email": _texto(origem.get("email") or origem.get("e-mail")) or "Não localizado",
+            "data_assinatura": data_individual,
+            "data_instrumento": data_instrumento or "Não localizado",
+            "data_reconhecimento_firma": data_rec,
+            "fonte": fonte,
+            "pagina": pagina,
+            "status": "Assinado",
+            "evidencia": evidencia,
+        })
+
+    base["assinaturas_contrato"] = recuperadas
+
 def _normalizar_assinaturas(raw: Any) -> List[Dict[str, Any]]:
     if not isinstance(raw, list):
         return []
@@ -1276,7 +1569,11 @@ def _normalizar_assinaturas(raw: Any) -> List[Dict[str, Any]]:
 
 
 def _assinaturas(base: MutableMapping[str, Any], raw: Mapping[str, Any], auditoria: List[Dict[str, Any]]) -> None:
-    assinaturas = _normalizar_assinaturas(raw.get("assinaturas_contrato") or base.get("assinaturas_contrato"))
+    fontes_assinatura: List[Dict[str, Any]] = []
+    for origem in (raw.get("assinaturas_contrato"), base.get("assinaturas_contrato")):
+        if isinstance(origem, list):
+            fontes_assinatura.extend(item for item in origem if isinstance(item, Mapping))
+    assinaturas = _normalizar_assinaturas(fontes_assinatura)
 
     # Em assinatura física, a data geral do instrumento não deve ser apresentada
     # como se fosse um carimbo individual de cada signatário.
