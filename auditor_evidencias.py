@@ -451,40 +451,6 @@ def _trecho_limitado(texto: Any, limite: int = 520) -> str:
     return cortado + "..."
 
 
-def normalizar_condicao_pagamento_dd(valor: Any) -> str:
-    """Normaliza uma condição executiva para o padrão ``NDD``.
-
-    Aceita tanto prazos escritos em dias (``30 dias``) quanto abreviações
-    usuais de compras (``30DD``, ``30 DDL`` e ``30DDF``). Também preserva
-    a regra de negócio aprovada para vencimento em dia fixo do mês
-    subsequente, por exemplo ``dia 15 do mês subsequente`` -> ``15DD``.
-    """
-    texto = _texto(valor)
-    if not texto:
-        return ""
-
-    padroes = (
-        # Abreviações usuais: DD, DDL e DDF. A saída oficial é sempre DD.
-        r"\b(\d{1,3})\s*(?:D\.?D\.?L?|D\.?D\.?F)\b",
-        # Prazo contado em dias.
-        r"\b(\d{1,3})(?:\s*\([^)]*\))?\s+dias?\b",
-        # Regra executiva aprovada: vencimento em dia fixo do mês subsequente.
-        r"vencimento\s+(?:at[eé]\s+(?:o\s+)?|no\s+|para\s+(?:o\s+)?)?dia\s+"
-        r"(\d{1,3})(?:\s*\([^)]*\))?\s+(?:do|no)\s+m[eê]s\s+subsequente",
-    )
-    for padrao in padroes:
-        m = re.search(padrao, texto, flags=re.I | re.S)
-        if not m:
-            continue
-        try:
-            dias = int(m.group(1))
-        except Exception:
-            continue
-        if 1 <= dias <= 365:
-            return f"{dias}DD"
-    return ""
-
-
 def _atualizar_auditoria(
     auditoria: List[Dict[str, Any]],
     campo: str,
@@ -609,36 +575,12 @@ def _extrair_condicao_pagamento_dd_documental(paginas: Mapping[int, str]) -> Tup
     # Maior prioridade: vencimento em dia definido do mês subsequente.
     # Ex.: "vencimento até o dia 15 (quinze) do mês subsequente".
     padrao_dia_mes = re.compile(
-        r"vencimento\s+(?:at[eé]\s+(?:o\s+)?|no\s+|para\s+(?:o\s+)?)?dia\s+"
-        r"(\d{1,3})(?:\s*\([^)]*\))?\s+(?:do|no)\s+m[eê]s\s+subsequente",
+        r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})(?:\s*\([^)]*\))?"
+        r"\s+do\s+m[eê]s\s+subsequente",
         flags=re.I | re.S,
     )
 
-    # Também reconhece abreviações que já aparecem no próprio documento,
-    # como 30DD, 30 DDL ou 30DDF, desde que estejam em contexto financeiro.
-    padrao_dd_explicito = re.compile(
-        r"\b(\d{1,3})\s*(?:D\.?D\.?L?|D\.?D\.?F)\b",
-        flags=re.I,
-    )
-
     for numero, pagina in paginas.items():
-        for m in padrao_dd_explicito.finditer(pagina):
-            try:
-                dias = int(m.group(1))
-            except Exception:
-                continue
-            if not 1 <= dias <= 365:
-                continue
-            inicio = max(0, m.start() - 180)
-            fim = min(len(pagina), m.end() + 220)
-            contexto = pagina[inicio:fim]
-            contexto_sem = _sem_acento(contexto).lower()
-            if not any(x in contexto_sem for x in (
-                "fatura", "nota fiscal", "pagamento", "remuneracao", "vencimento", "condicao de pagamento"
-            )):
-                continue
-            candidatos.append((110, numero, m.start(), f"{dias}DD", _trecho_limitado(contexto, 420)))
-
         for m in padrao_dia_mes.finditer(pagina):
             try:
                 dias = int(m.group(1))

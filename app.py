@@ -41,7 +41,6 @@ from auditor_evidencias import (
     PROMPT_VERIFICADOR_V4,
     aplicar_motor_evidencias_v4,
     linhas_auditoria_para_tela,
-    normalizar_condicao_pagamento_dd,
 )
 from extrator_tabela_comercial import (
     extrair_tabela_comercial_completa,
@@ -4590,9 +4589,11 @@ def padronizar_resultado_ia(base: Dict[str, Any]) -> Dict[str, Any]:
     # Padroniza o card executivo da condição de pagamento em DD.
     # Exemplos: 15DD, 30DD, 60DD.
     pag = clean_text(base.get("condicao_pagamento_dias"))
-    pag_dd = normalizar_condicao_pagamento_dd(pag)
-    if pag_dd:
-        base["condicao_pagamento_dias"] = pag_dd
+    m_pag_dd = re.search(r"\b(\d{1,3})\s*(?:d\.?d\.?|dias?)\b", pag, flags=re.IGNORECASE)
+    if not m_pag_dd:
+        m_pag_dd = re.search(r"vencimento\s+at[eé]\s+o\s+dia\s+(\d{1,3})", pag, flags=re.IGNORECASE)
+    if m_pag_dd:
+        base["condicao_pagamento_dias"] = f"{int(m_pag_dd.group(1))}DD"
 
     # Mantém os cards com resumo executivo: detalhado o suficiente, sem virar cláusula inteira.
     limites = {
