@@ -8811,14 +8811,9 @@ def render_historico_card_executivo(row: pd.Series) -> str:
 
     subtitulo = f"Análise ID {safe(id_reg)} • {safe(data)}"
 
-    try:
-        excel_bytes = gerar_excel_card_bytes(row)
-        excel_b64 = base64.b64encode(excel_bytes).decode("ascii")
-        excel_href = f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{excel_b64}"
-        excel_file = f"analise_contrato_{id_reg or 'historico'}.xlsx"
-        excel_html = f'<a class="history-excel-link-v4" href="{excel_href}" download="{safe(excel_file)}">📥 Baixar Excel</a>'
-    except Exception:
-        excel_html = '<span class="history-excel-link-v4">Excel indisponível</span>'
+    # O relatório completo não é mais incorporado em base64 dentro de cada card.
+    # Isso deixa o Histórico leve mesmo com muitos registros.
+    excel_html = '<span class="history-chip-v2">🔎 Abra no seletor de análise completa</span>'
 
     html_card = f"""
 <div class="history-card-v2">
@@ -8970,6 +8965,326 @@ def render_analise_completa_historico(row: pd.Series) -> None:
         key=f"download_historico_completo_{row.get('id', id(row))}",
     )
 
+
+# =========================================================
+# CAMADA PROFISSIONAL - DASHBOARD / HISTÓRICO / ASSISTENTE IA
+# Esta camada é chamada somente nessas três páginas.
+# A aba "Nova Análise" permanece com seu fluxo e visual originais.
+# =========================================================
+def _hist_parse_resultado_json(row: Any) -> Dict[str, Any]:
+    '''Lê com segurança o JSON completo salvo no histórico.
+
+    Aceita Series, dicionário, JSON já desserializado e registros antigos.
+    Nunca interrompe Dashboard ou Histórico por conteúdo incompleto.
+    '''
+    try:
+        raw = row.get("resultado_json") if hasattr(row, "get") else None
+    except Exception:
+        raw = None
+
+    if isinstance(raw, dict):
+        return dict(raw)
+
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if raw:
+            try:
+                payload = json.loads(raw)
+                return payload if isinstance(payload, dict) else {}
+            except Exception:
+                return {}
+    return {}
+
+
+def _valor_presente(*valores: Any, padrao: str = "Não informado") -> str:
+    invalidos = {"", "none", "nan", "não localizado", "não localizada", "não informado"}
+    for valor in valores:
+        if valor is None:
+            continue
+        texto = clean_text(valor)
+        if texto.lower() not in invalidos:
+            return texto
+    return padrao
+
+
+def _normalizar_assinatura(valor: Any) -> str:
+    texto = clean_text(valor).strip()
+    upper = texto.upper()
+    if upper in {"SIM", "ASSINADO", "VALIDADO", "TRUE", "1"}:
+        return "Sim"
+    if upper in {"NÃO", "NAO", "NÃO VALIDADO", "NAO VALIDADO", "NÃO ASSINADO", "NAO ASSINADO", "FALSE", "0"}:
+        return "Não validado"
+    return texto if texto not in {"Não localizado", "Não informado"} else "Não informado"
+
+
+def _data_exibicao_historico(row: Any) -> str:
+    data = _valor_presente(
+        row.get("data_analise") if hasattr(row, "get") else None,
+        row.get("data_criacao") if hasattr(row, "get") else None,
+        padrao="Data não informada",
+    )
+    try:
+        parsed = pd.to_datetime(data, errors="coerce", dayfirst=True)
+        if pd.notna(parsed):
+            return parsed.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        pass
+    return data
+
+
+def _tom_risco(risco: Any) -> tuple[str, str, str]:
+    risco_norm = normalize_risco(risco)
+    if risco_norm == "ALTO":
+        return "high", "#ef4444", "Risco alto"
+    if risco_norm in {"MÉDIO", "MEDIO"}:
+        return "medium", "#f59e0b", "Risco médio"
+    if risco_norm == "BAIXO":
+        return "low", "#22c55e", "Risco baixo"
+    return "neutral", "#94a3b8", "Risco não classificado"
+
+
+def inject_professional_page_css(page: str) -> None:
+    '''CSS isolado: só é injetado quando Dashboard, Histórico ou Assistente está ativo.'''
+    page = str(page or "").lower().strip()
+    common = r'''
+    <style>
+    :root{
+        --mgmt-bg:#071018;
+        --mgmt-panel:#0d1722;
+        --mgmt-panel-2:#111d29;
+        --mgmt-gold:#d7bf75;
+        --mgmt-gold-soft:#f4e6ac;
+        --mgmt-green:#007a5e;
+        --mgmt-green-2:#00a67d;
+        --mgmt-text:#f8fafc;
+        --mgmt-muted:#9aa8b8;
+        --mgmt-line:rgba(215,191,117,.20);
+    }
+    .mgmt-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:28px 0 14px;}
+    .mgmt-section-head h2{margin:0;color:var(--mgmt-gold);font-size:22px;font-weight:950;letter-spacing:-.02em;}
+    .mgmt-section-head p{margin:5px 0 0;color:var(--mgmt-muted);font-size:13px;font-weight:700;}
+    .mgmt-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin:16px 0 18px;}
+    .mgmt-kpi{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(17,29,41,.98),rgba(8,16,24,.98));border:1px solid var(--mgmt-line);border-radius:18px;padding:17px 18px;min-height:118px;box-shadow:0 16px 36px rgba(0,0,0,.24);}
+    .mgmt-kpi::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--accent,#d7bf75),transparent 85%);}
+    .mgmt-kpi small{display:block;color:var(--mgmt-gold);font-size:10px;text-transform:uppercase;letter-spacing:.10em;font-weight:950;margin-bottom:13px;}
+    .mgmt-kpi strong{display:block;color:#fff;font-size:30px;line-height:1;font-weight:950;letter-spacing:-.03em;}
+    .mgmt-kpi span{display:block;color:var(--mgmt-muted);font-size:11px;font-weight:750;margin-top:10px;line-height:1.25;}
+    .mgmt-kpi.low{--accent:#22c55e}.mgmt-kpi.medium{--accent:#f59e0b}.mgmt-kpi.high{--accent:#ef4444}.mgmt-kpi.info{--accent:#38bdf8}.mgmt-kpi.gold{--accent:#d7bf75}.mgmt-kpi.green{--accent:#00a67d}
+    .mgmt-callout{background:linear-gradient(135deg,rgba(0,91,70,.50),rgba(10,22,31,.94));border:1px solid rgba(0,166,125,.32);border-radius:19px;padding:20px 22px;margin:14px 0 18px;box-shadow:0 16px 38px rgba(0,0,0,.20);}
+    .mgmt-callout h3{margin:0 0 8px;color:var(--mgmt-gold);font-size:19px;font-weight:950;}
+    .mgmt-callout p{margin:5px 0;color:#e9eef5;font-size:13px;line-height:1.55;font-weight:700;}
+    .mgmt-callout.alert{border-color:rgba(239,68,68,.38);background:linear-gradient(135deg,rgba(109,26,26,.40),rgba(10,22,31,.94));}
+    .mgmt-callout.ok{border-color:rgba(34,197,94,.38);}
+    .mgmt-toolbar{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:13px 16px;border-radius:15px;background:rgba(14,25,36,.78);border:1px solid var(--mgmt-line);margin:12px 0 18px;color:#dce5ef;font-size:12px;font-weight:800;}
+    .mgmt-toolbar b{color:#fff}.mgmt-toolbar .muted{color:var(--mgmt-muted);}
+    div[data-testid="stTabs"] button{font-weight:900!important;padding-top:12px!important;padding-bottom:12px!important;}
+    div[data-testid="stExpander"]{border-radius:16px!important;overflow:hidden;}
+    div[data-testid="stDataFrame"]{border:1px solid rgba(215,191,117,.18);border-radius:16px;overflow:hidden;}
+    .mgmt-empty{padding:30px;border-radius:20px;background:linear-gradient(145deg,rgba(16,27,38,.96),rgba(8,15,23,.96));border:1px dashed rgba(215,191,117,.30);text-align:center;color:#cbd5e1;}
+    .mgmt-empty strong{display:block;color:#fff;font-size:20px;margin-bottom:7px;}
+    @media(max-width:1250px){.mgmt-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
+    @media(max-width:760px){.mgmt-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.mgmt-section-head,.mgmt-toolbar{align-items:flex-start;flex-direction:column;}}
+    </style>
+    '''
+
+    dashboard_css = r'''
+    <style>
+    .dash-overview-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;margin:14px 0 22px;}
+    .dash-panel{background:linear-gradient(145deg,rgba(13,24,35,.98),rgba(7,15,23,.98));border:1px solid rgba(215,191,117,.20);border-radius:20px;padding:20px 22px;box-shadow:0 18px 42px rgba(0,0,0,.23);}
+    .dash-panel h3{margin:0 0 15px;color:#fff;font-size:17px;font-weight:950;}
+    .dash-risk-row{display:grid;grid-template-columns:90px 1fr 42px;gap:12px;align-items:center;margin:13px 0;color:#dbe4ee;font-size:12px;font-weight:850;}
+    .dash-risk-track{height:10px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;}
+    .dash-risk-fill{height:100%;border-radius:999px;min-width:3px;box-shadow:0 0 18px currentColor;}
+    .dash-risk-fill.high{background:#ef4444}.dash-risk-fill.medium{background:#f59e0b}.dash-risk-fill.low{background:#22c55e}
+    .dash-quality{display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+    .dash-quality-item{padding:15px;border-radius:15px;background:rgba(255,255,255,.04);border:1px solid rgba(215,191,117,.14);}
+    .dash-quality-item small{display:block;color:#9aa8b8;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;}
+    .dash-quality-item strong{display:block;color:#fff;font-size:22px;font-weight:950;margin-top:8px;}
+    .dash-contract-card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(15,26,38,.98),rgba(7,14,22,.98));border:1px solid rgba(215,191,117,.20);border-radius:19px;padding:19px 20px;margin:0 0 13px;box-shadow:0 16px 38px rgba(0,0,0,.22);min-height:240px;}
+    .dash-contract-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--risk-color,#94a3b8);}
+    .dash-card-top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:14px;}
+    .dash-card-title{color:#fff;font-size:18px;line-height:1.25;font-weight:950;overflow-wrap:anywhere;}
+    .dash-card-date{color:#8fa0b2;font-size:10px;font-weight:800;margin-top:6px;}
+    .dash-risk-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:7px 10px;border-radius:999px;background:color-mix(in srgb,var(--risk-color) 13%, transparent);border:1px solid color-mix(in srgb,var(--risk-color) 32%, transparent);color:var(--risk-color);font-size:10px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;}
+    .dash-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:13px 0;}
+    .dash-card-field{padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.035);border:1px solid rgba(215,191,117,.12);min-width:0;}
+    .dash-card-field small{display:block;color:#9aa8b8;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;}
+    .dash-card-field strong{display:block;color:#edf3f8;font-size:12px;line-height:1.35;font-weight:850;overflow-wrap:anywhere;}
+    .dash-score-line{display:flex;align-items:center;gap:12px;margin-top:13px;}
+    .dash-score-line span{color:#d7bf75;font-size:11px;font-weight:900;min-width:63px;}
+    .dash-score-track{height:8px;flex:1;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;}
+    .dash-score-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#007a5e,#d7bf75);}
+    .dash-score-line b{color:#fff;font-size:12px;}
+    .dash-card-foot{display:flex;justify-content:space-between;gap:10px;margin-top:13px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07);color:#91a0af;font-size:10px;font-weight:800;}
+    @media(max-width:1000px){.dash-overview-grid{grid-template-columns:1fr;}}
+    @media(max-width:700px){.dash-card-grid{grid-template-columns:1fr;}.dash-card-top,.dash-card-foot{flex-direction:column;}}
+    </style>
+    '''
+
+    history_css = r'''
+    <style>
+    .history-filter-shell{background:linear-gradient(145deg,rgba(14,25,36,.98),rgba(8,16,24,.98));border:1px solid rgba(215,191,117,.22);border-radius:20px;padding:18px 20px 8px;margin:10px 0 16px;box-shadow:0 18px 42px rgba(0,0,0,.22);}
+    .history-filter-shell h3{margin:0;color:#fff;font-size:17px;font-weight:950;}
+    .history-filter-shell p{margin:5px 0 14px;color:#96a5b5;font-size:12px;font-weight:700;}
+    .history-count-note{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:13px 0 17px;padding:13px 16px;border-radius:15px;background:linear-gradient(135deg,rgba(0,91,70,.55),rgba(12,24,34,.92));border:1px solid rgba(0,166,125,.30);color:#e8f3ef;font-size:12px;font-weight:850;}
+    .history-count-note strong{color:#fff;font-size:15px;}
+    .history-card-v2{margin-top:16px!important;}
+    .history-actions-row{display:flex;justify-content:flex-end;margin:-4px 0 8px;}
+    div[data-testid="stForm"]{border:0!important;padding:0!important;}
+    </style>
+    '''
+
+    assistant_css = r'''
+    <style>
+    .ai-command-center{background:radial-gradient(circle at top right,rgba(0,166,125,.12),transparent 32%),linear-gradient(145deg,rgba(14,25,36,.98),rgba(7,15,23,.98));border:1px solid rgba(215,191,117,.22);border-radius:22px;padding:22px 24px;margin:16px 0 20px;box-shadow:0 20px 48px rgba(0,0,0,.25);}
+    .ai-command-center h3{margin:0 0 5px;color:#fff;font-size:19px;font-weight:950;}
+    .ai-command-center p{margin:0;color:#9aa8b8;font-size:12px;font-weight:700;line-height:1.45;}
+    .ai-base-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-top:17px;}
+    .ai-base-card{padding:14px 15px;border-radius:15px;background:rgba(255,255,255,.04);border:1px solid rgba(215,191,117,.14);}
+    .ai-base-card small{display:block;color:#d7bf75;font-size:9px;text-transform:uppercase;letter-spacing:.09em;font-weight:950;}
+    .ai-base-card strong{display:block;color:#fff;font-size:22px;font-weight:950;margin-top:7px;}
+    .ai-quick-label{color:#d7bf75;font-size:12px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin:6px 0 10px;}
+    .ai-guide-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:15px 0;}
+    .ai-guide-card{padding:18px;border-radius:17px;background:linear-gradient(145deg,rgba(17,29,41,.96),rgba(9,17,25,.96));border:1px solid rgba(215,191,117,.16);}
+    .ai-guide-card b{display:block;color:#fff;font-size:15px;margin-bottom:7px;}
+    .ai-guide-card span{color:#9aa8b8;font-size:12px;line-height:1.45;font-weight:700;}
+    .ai-panel{background:linear-gradient(145deg,#101b27,#0a131c)!important;border:1px solid rgba(215,191,117,.19)!important;border-radius:19px!important;padding:21px 22px!important;margin:15px 0!important;box-shadow:0 18px 42px rgba(0,0,0,.22)!important;}
+    .ai-question-card{background:linear-gradient(135deg,rgba(0,91,70,.70),rgba(15,28,39,.94))!important;border:1px solid rgba(0,166,125,.35)!important;border-left:4px solid #d7bf75!important;border-radius:16px!important;color:#fff!important;}
+    .ai-answer-title{color:#d7bf75!important;font-size:19px!important;}
+    .ai-contract-card{background:linear-gradient(145deg,#111d29,#09131c)!important;border-color:rgba(215,191,117,.15)!important;border-radius:18px!important;}
+    .ai-summary-card{background:rgba(255,255,255,.04)!important;border-color:rgba(215,191,117,.13)!important;}
+    div[data-baseweb="select"] > div:focus-within{border-color:#d7bf75!important;box-shadow:0 0 0 1px rgba(215,191,117,.45)!important;}
+    div[data-testid="stChatInput"]{border-top:1px solid rgba(215,191,117,.16);background:rgba(5,11,17,.96);}
+    div[data-testid="stChatInput"] textarea{border-color:rgba(215,191,117,.25)!important;}
+    @media(max-width:950px){.ai-base-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.ai-guide-grid{grid-template-columns:1fr;}}
+    </style>
+    '''
+
+    css = common
+    if page == "dashboard":
+        css += dashboard_css
+    elif page in {"historico", "histórico"}:
+        css += history_css
+    elif page in {"assistente", "assistente ia"}:
+        css += assistant_css
+    st.markdown(css, unsafe_allow_html=True)
+
+
+def render_management_kpis(cards: List[Dict[str, Any]]) -> None:
+    html_cards = []
+    for card in cards:
+        html_cards.append(
+            f'''<div class="mgmt-kpi {safe(card.get("tone", "gold"))}">
+            <small>{safe(card.get("label"))}</small>
+            <strong>{safe(card.get("value"))}</strong>
+            <span>{safe(card.get("note"))}</span>
+            </div>'''
+        )
+    st.markdown(f'<div class="mgmt-kpi-grid">{"".join(html_cards)}</div>', unsafe_allow_html=True)
+
+
+def render_dashboard_contract_card(row: Any) -> str:
+    resultado = _hist_parse_resultado_json(row)
+    fornecedor = _valor_presente(
+        row.get("fornecedor") if hasattr(row, "get") else None,
+        resultado.get("contraparte"),
+        resultado.get("fornecedor"),
+        padrao="Contraparte não informada",
+    )
+    cnpj = _valor_presente(
+        row.get("cnpj") if hasattr(row, "get") else None,
+        resultado.get("cnpj_contraparte"),
+        padrao="CNPJ não informado",
+    )
+    risco = normalize_risco(_valor_presente(
+        row.get("risco") if hasattr(row, "get") else None,
+        resultado.get("risco"),
+        padrao="N/A",
+    ))
+    _, cor, risco_label = _tom_risco(risco)
+    score_raw = _valor_presente(
+        row.get("score") if hasattr(row, "get") else None,
+        resultado.get("score"),
+        padrao="0",
+    )
+    score = max(0.0, min(100.0, as_float_score(score_raw)))
+    score_txt = f"{score:.0f}" if score.is_integer() else f"{score:.1f}"
+    valor = _valor_presente(
+        row.get("valor_total") if hasattr(row, "get") else None,
+        resultado.get("valor_contrato_original"),
+        resultado.get("valor_total"),
+        padrao="Não informado",
+    )
+    status = _valor_presente(
+        row.get("status") if hasattr(row, "get") else None,
+        resultado.get("status_contratual"),
+        resultado.get("status"),
+        padrao="Não informado",
+    )
+    assinatura = _normalizar_assinatura(_valor_presente(
+        row.get("contrato_assinado") if hasattr(row, "get") else None,
+        resultado.get("contrato_assinado"),
+        padrao="Não informado",
+    ))
+    origem = _valor_presente(
+        row.get("tipo_origem") if hasattr(row, "get") else None,
+        resultado.get("tipo_origem"),
+        padrao="Origem não informada",
+    )
+    modelo = _valor_presente(
+        row.get("modelo_ia") if hasattr(row, "get") else None,
+        resultado.get("modelo_ia"),
+        padrao="Modelo não informado",
+    )
+    data = _data_exibicao_historico(row)
+    return f'''
+    <div class="dash-contract-card" style="--risk-color:{cor}">
+        <div class="dash-card-top">
+            <div>
+                <div class="dash-card-title">{safe(fornecedor)}</div>
+                <div class="dash-card-date">Analisado em {safe(data)}</div>
+            </div>
+            <span class="dash-risk-badge">{safe(risco_label)}</span>
+        </div>
+        <div class="dash-card-grid">
+            <div class="dash-card-field"><small>CNPJ</small><strong>{safe(cnpj)}</strong></div>
+            <div class="dash-card-field"><small>Valor</small><strong>{safe(valor)}</strong></div>
+            <div class="dash-card-field"><small>Status</small><strong>{safe(status)}</strong></div>
+            <div class="dash-card-field"><small>Assinatura</small><strong>{safe(assinatura)}</strong></div>
+        </div>
+        <div class="dash-score-line"><span>Score</span><div class="dash-score-track"><div class="dash-score-fill" style="width:{score}%"></div></div><b>{safe(score_txt)}</b></div>
+        <div class="dash-card-foot"><span>{safe(origem)}</span><span>{safe(modelo)}</span></div>
+    </div>
+    '''
+
+
+def render_dashboard_distribution(total: int, alto: int, medio: int, baixo: int, assinados: int, score_medio: float) -> None:
+    def pct(valor: int) -> float:
+        return round((valor / total * 100), 1) if total else 0.0
+
+    st.markdown(
+        f'''
+        <div class="dash-overview-grid">
+            <div class="dash-panel">
+                <h3>Distribuição de risco</h3>
+                <div class="dash-risk-row"><span>Alto</span><div class="dash-risk-track"><div class="dash-risk-fill high" style="width:{pct(alto)}%"></div></div><b>{alto}</b></div>
+                <div class="dash-risk-row"><span>Médio</span><div class="dash-risk-track"><div class="dash-risk-fill medium" style="width:{pct(medio)}%"></div></div><b>{medio}</b></div>
+                <div class="dash-risk-row"><span>Baixo</span><div class="dash-risk-track"><div class="dash-risk-fill low" style="width:{pct(baixo)}%"></div></div><b>{baixo}</b></div>
+            </div>
+            <div class="dash-panel">
+                <h3>Qualidade da base</h3>
+                <div class="dash-quality">
+                    <div class="dash-quality-item"><small>Contratos assinados</small><strong>{assinados}</strong></div>
+                    <div class="dash-quality-item"><small>Taxa de assinatura</small><strong>{pct(assinados)}%</strong></div>
+                    <div class="dash-quality-item"><small>Score médio</small><strong>{score_medio}</strong></div>
+                    <div class="dash-quality-item"><small>Base monitorada</small><strong>{total}</strong></div>
+                </div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
 # =========================================================
 # SIDEBAR
 # =========================================================
@@ -9009,254 +9324,130 @@ with st.sidebar:
 # DASHBOARD
 # =========================================================
 if pagina == "🏠 Dashboard":
-    render_hero("Dashboard", "Visão executiva das análises de contratos, riscos e pendências.")
+    inject_professional_page_css("dashboard")
+    render_hero("Dashboard", "Visão executiva das análises, riscos, assinaturas e qualidade da base contratual.")
 
     historico = carregar_historico_seguro()
+    total = int(len(historico))
 
-    col_a, col_b = st.columns([3, 1])
-    with col_b:
-        if st.button("🗑️ Limpar histórico", use_container_width=True):
-            limpar_historico()
-            st.success("Histórico limpo com sucesso.")
-            st.rerun()
-
-    total = len(historico)
-    if total > 0:
-        risco_series = historico["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+    if total:
+        risco_series = historico.get("risco", pd.Series(index=historico.index, dtype="object")).astype(str).str.upper().str.strip().replace({"MEDIO": "MÉDIO"})
         alto = int((risco_series == "ALTO").sum())
         medio = int((risco_series == "MÉDIO").sum())
         baixo = int((risco_series == "BAIXO").sum())
-        score_medio = round(historico["score"].apply(as_float_score).mean(), 1)
+        score_series = historico.get("score", pd.Series(0, index=historico.index)).apply(as_float_score)
+        score_medio = round(float(score_series.mean()), 1)
+        assinaturas = historico.get("contrato_assinado", pd.Series("", index=historico.index)).astype(str).str.upper().str.strip()
+        assinados = int(assinaturas.isin(["SIM", "ASSINADO", "VALIDADO"]).sum())
     else:
-        alto = medio = baixo = score_medio = 0
+        alto = medio = baixo = assinados = 0
+        score_medio = 0.0
 
-    st.markdown(
-        f"""
-        <div class="executive-box">
-            <h3>📊 Resumo executivo</h3>
-            <p>O ambiente possui <b>{total}</b> contrato(s) analisado(s). Atualmente existem <b>{alto}</b> contrato(s) classificados como risco alto.</p>
-            <p>A prioridade recomendada é revisar contratos de risco <b>ALTO</b> antes da criação ou continuidade de RC/PO.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    top_left, top_right = st.columns([3.2, 1])
+    with top_left:
+        status_css = "alert" if alto else "ok"
+        status_titulo = "Prioridade de revisão" if alto else "Ambiente contratual monitorado"
+        status_texto = (
+            f"Há {alto} contrato(s) de risco alto. Revise esses registros antes da criação ou continuidade de RC/PO."
+            if alto
+            else "Não há contratos classificados como risco alto na base atual. Continue acompanhando assinaturas, vigências e pendências."
+        )
+        st.markdown(
+            f'<div class="mgmt-callout {status_css}"><h3>{safe(status_titulo)}</h3><p>{safe(status_texto)}</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    with top_right:
+        with st.expander("⚙️ Ações do painel", expanded=False):
+            st.caption("A limpeza remove todo o histórico salvo neste banco.")
+            if st.button("Solicitar limpeza", use_container_width=True, key="dashboard_solicitar_limpeza"):
+                st.session_state["dashboard_confirmar_limpeza"] = True
+            if st.session_state.get("dashboard_confirmar_limpeza"):
+                st.warning("Confirma a exclusão de todas as análises?")
+                ca, cb = st.columns(2)
+                if ca.button("Confirmar", type="primary", use_container_width=True, key="dashboard_confirmar_limpeza_btn"):
+                    limpar_historico()
+                    st.session_state.pop("dashboard_confirmar_limpeza", None)
+                    st.success("Histórico limpo com sucesso.")
+                    st.rerun()
+                if cb.button("Cancelar", use_container_width=True, key="dashboard_cancelar_limpeza_btn"):
+                    st.session_state.pop("dashboard_confirmar_limpeza", None)
+                    st.rerun()
+
+    render_management_kpis([
+        {"label": "Contratos", "value": total, "note": "análises registradas", "tone": "green"},
+        {"label": "Risco alto", "value": alto, "note": "revisão prioritária", "tone": "high"},
+        {"label": "Risco médio", "value": medio, "note": "acompanhar condições", "tone": "medium"},
+        {"label": "Risco baixo", "value": baixo, "note": "sem alerta crítico", "tone": "low"},
+        {"label": "Assinados", "value": assinados, "note": "evidência registrada", "tone": "info"},
+        {"label": "Score médio", "value": score_medio, "note": "qualidade das análises", "tone": "gold"},
+    ])
+
+    render_dashboard_distribution(total, alto, medio, baixo, assinados, score_medio)
+
+    st.markdown('<div class="mgmt-section-head"><div><h2>Últimas análises</h2><p>Visão rápida dos contratos mais recentes da base.</p></div></div>', unsafe_allow_html=True)
 
     filtro_param = st.query_params.get("risco", "TODOS")
     if isinstance(filtro_param, list):
         filtro_param = filtro_param[0] if filtro_param else "TODOS"
-
-    filtro_atual = normalize_risco(filtro_param)
-    if filtro_atual in ["MEDIO", "MÉDIO"]:
-        filtro_atual = "MÉDIO"
-    if filtro_atual not in ["TODOS", "ALTO", "MÉDIO", "BAIXO"]:
-        filtro_atual = "TODOS"
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.markdown(render_filter_metric("Contratos", total, "TODOS", filtro_atual == "TODOS"), unsafe_allow_html=True)
-    c2.markdown(render_filter_metric("Risco alto", alto, "ALTO", filtro_atual == "ALTO"), unsafe_allow_html=True)
-    c3.markdown(render_filter_metric("Risco médio", medio, "MEDIO", filtro_atual == "MÉDIO"), unsafe_allow_html=True)
-    c4.markdown(render_filter_metric("Risco baixo", baixo, "BAIXO", filtro_atual == "BAIXO"), unsafe_allow_html=True)
-    c5.markdown(render_filter_metric("Score médio", score_medio, "TODOS", False), unsafe_allow_html=True)
+    filtro_inicial = normalize_risco(filtro_param)
+    if filtro_inicial == "MEDIO":
+        filtro_inicial = "MÉDIO"
+    opcoes_filtro = ["TODOS", "ALTO", "MÉDIO", "BAIXO"]
+    indice_filtro = opcoes_filtro.index(filtro_inicial) if filtro_inicial in opcoes_filtro else 0
+    filtro_atual = st.radio(
+        "Filtrar análises por risco",
+        opcoes_filtro,
+        index=indice_filtro,
+        horizontal=True,
+        key="dashboard_filtro_risco",
+    )
 
     historico_filtrado = historico.copy()
     if not historico_filtrado.empty and filtro_atual != "TODOS":
-        risco_filtro = historico_filtrado["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+        risco_filtro = historico_filtrado.get("risco", pd.Series(index=historico_filtrado.index, dtype="object")).astype(str).str.upper().str.strip().replace({"MEDIO": "MÉDIO"})
         historico_filtrado = historico_filtrado[risco_filtro == filtro_atual]
 
-    texto_filtro = "todos os contratos" if filtro_atual == "TODOS" else f"contratos com risco {filtro_atual}"
     st.markdown(
-        f'<div class="filter-note">🔎 Visualizando {len(historico_filtrado)} de {total} análise(s): <b>{safe(texto_filtro)}</b>.</div>',
+        f'<div class="mgmt-toolbar"><span><b>{len(historico_filtrado)}</b> registro(s) exibido(s)</span><span class="muted">Filtro: {safe(filtro_atual)}</span></div>',
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="section-title">Últimas análises</div>', unsafe_allow_html=True)
     if historico.empty:
-        st.info("Nenhuma análise registrada ainda.")
+        st.markdown('<div class="mgmt-empty"><strong>Nenhuma análise registrada</strong>Use a aba Nova Análise para processar o primeiro contrato.</div>', unsafe_allow_html=True)
     elif historico_filtrado.empty:
-        st.warning("Nenhuma análise encontrada para este filtro.")
+        st.warning("Nenhuma análise encontrada para o filtro selecionado.")
     else:
-        for _, row in historico_filtrado.head(10).iterrows():
-            render_contract_card(row)
+        registros = historico_filtrado.head(8).reset_index(drop=True)
+        for inicio in range(0, len(registros), 2):
+            cols = st.columns(2)
+            for offset, col in enumerate(cols):
+                idx = inicio + offset
+                if idx >= len(registros):
+                    continue
+                with col:
+                    st.markdown(render_dashboard_contract_card(registros.iloc[idx]), unsafe_allow_html=True)
+        if len(historico_filtrado) > 8:
+            st.info(f"Exibindo as 8 análises mais recentes de {len(historico_filtrado)} registros filtrados. Consulte a aba Histórico para visualizar todos.")
 
-        st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
-        st.stop()
+    st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
+    st.stop()
 
 # =========================================================
 # ASSISTENTE IA LOCAL
 # =========================================================
 if pagina == "🤖 Assistente IA":
-
+    inject_professional_page_css("assistente ia")
     render_hero(
         "Assistente Auditor",
-        "Consulte informações dos contratos analisados no sistema."
+        "Consulte o histórico contratual com respostas objetivas, filtros inteligentes e visão executiva.",
     )
 
     contratos = carregar_contratos_chat()
-
     if contratos.empty:
-        st.warning("Nenhum contrato encontrado no banco.")
+        st.markdown('<div class="mgmt-empty"><strong>Base ainda vazia</strong>O Assistente Auditor ficará disponível após a primeira análise salva.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
-
-    st.markdown(
-        """
-        <style>
-        .ai-panel{
-            background:linear-gradient(145deg,#101821,#0b1118);
-            border:1px solid rgba(215,191,117,.16);
-            border-radius:18px;
-            padding:22px 24px;
-            margin:18px 0 22px;
-            box-shadow:0 18px 45px rgba(0,0,0,.22);
-        }
-        .ai-question-card{
-            background:#1a202b;
-            border-left:6px solid #ff4d4d;
-            border-radius:14px;
-            padding:16px 18px;
-            margin:18px 0 14px;
-            color:#ffffff;
-            font-weight:900;
-            box-shadow:0 14px 30px rgba(0,0,0,.18);
-        }
-        .ai-answer-title{
-            color:#f3d36b;
-            font-weight:900;
-            font-size:18px;
-            margin:0 0 14px;
-        }
-        .ai-answer-text{
-            color:#e5e7eb;
-            font-size:15px;
-            line-height:1.75;
-            font-weight:650;
-        }
-        .ai-summary-grid{
-            display:grid;
-            grid-template-columns:repeat(5,minmax(0,1fr));
-            gap:14px;
-            margin-top:12px;
-        }
-        .ai-summary-card{
-            background:#151d28;
-            border:1px solid rgba(255,255,255,.06);
-            border-radius:14px;
-            padding:16px;
-        }
-        .ai-summary-card small{
-            color:#cbd5e1;
-            display:block;
-            font-size:11px;
-            text-transform:uppercase;
-            letter-spacing:.05em;
-        }
-        .ai-summary-card strong{
-            display:block;
-            color:#ffffff;
-            font-size:27px;
-            margin-top:8px;
-        }
-        .ai-contract-card{
-            background:#151d28;
-            border:1px solid rgba(255,255,255,.06);
-            border-left:6px solid var(--risk-color);
-            border-radius:16px;
-            padding:18px 20px;
-            margin:14px 0;
-            box-shadow:0 12px 28px rgba(0,0,0,.16);
-        }
-        .ai-contract-title{
-            color:#ffffff;
-            font-size:19px;
-            font-weight:900;
-            line-height:1.35;
-            overflow-wrap:anywhere;
-        }
-        .ai-risk-badge{
-            display:inline-flex;
-            align-items:center;
-            gap:6px;
-            margin:10px 0 14px;
-            padding:5px 12px;
-            border-radius:999px;
-            background:var(--risk-bg);
-            color:var(--risk-color);
-            font-size:12px;
-            font-weight:900;
-        }
-        .ai-contract-grid{
-            display:grid;
-            grid-template-columns:repeat(4,minmax(0,1fr));
-            gap:14px;
-        }
-        .ai-info-label{
-            color:#94a3b8;
-            font-size:11px;
-            text-transform:uppercase;
-            letter-spacing:.04em;
-            font-weight:800;
-        }
-        .ai-info-value{
-            color:#ffffff;
-            font-size:13px;
-            font-weight:750;
-            margin-top:5px;
-            overflow-wrap:anywhere;
-        }
-        .ai-empty-box{
-            background:#111827;
-            border:1px dashed rgba(250,204,21,.35);
-            border-radius:14px;
-            padding:18px;
-            color:#cbd5e1;
-            font-weight:700;
-        }
-        .ai-mini-note{
-            color:#9ca3af;
-            font-size:13px;
-            margin-top:12px;
-            line-height:1.6;
-        }
-        @media (max-width: 1100px){
-            .ai-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
-            .ai-contract-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
-        }
-        @media (max-width: 700px){
-            .ai-summary-grid{grid-template-columns:1fr;}
-            .ai-contract-grid{grid-template-columns:1fr;}
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="section-title">Perguntas rápidas</div>', unsafe_allow_html=True)
-
-    exemplos = [
-        "Quantos contratos existem?",
-        "Quais contratos são de risco alto?",
-        "Quais contratos são de risco médio?",
-        "Quais contratos são de risco baixo?",
-        "Qual contrato tem maior valor?",
-        "Qual contrato tem menor valor?",
-        "Qual contrato tem menor score?",
-        "Qual contrato tem maior score?",
-        "Qual é o score médio?",
-        "Quais contratos estão assinados?",
-        "Quais contratos não estão assinados?",
-        "Quais contratos são do Projuris?",
-        "Quais contratos são do Ariba?",
-        "Quais contratos foram analisados pelo Gemini?",
-        "Liste os últimos contratos analisados",
-    ]
-
-    pergunta_exemplo = st.selectbox(
-        "Escolha uma pergunta pronta",
-        [""] + exemplos,
-        key="assistente_ia_pergunta_pronta",
-    )
-
-    pergunta_digitada = st.chat_input("Ou digite sua pergunta sobre os contratos...")
-    pergunta = (pergunta_digitada or pergunta_exemplo or "").strip()
 
     def texto_tem(texto, palavras):
         texto = str(texto or "").lower()
@@ -9265,19 +9456,10 @@ if pagina == "🤖 Assistente IA":
     def _garantir_colunas_chat(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         defaults = {
-            "fornecedor": "Não informado",
-            "cnpj": "Não informado",
-            "valor_total": "Não informado",
-            "vigencia": "Não informado",
-            "status": "Não informado",
-            "risco": "N/A",
-            "score": 0,
-            "contrato_assinado": "Não informado",
-            "modelo_ia": "Não informado",
-            "tipo_origem": "Não informado",
-            "arquivo": "Não informado",
-            "data_analise": "Não informado",
-            "id": "",
+            "fornecedor": "Não informado", "cnpj": "Não informado", "valor_total": "Não informado",
+            "vigencia": "Não informado", "status": "Não informado", "risco": "N/A", "score": 0,
+            "contrato_assinado": "Não informado", "modelo_ia": "Não informado", "tipo_origem": "Não informado",
+            "arquivo": "Não informado", "data_analise": "Não informado", "id": "",
         }
         for col, default in defaults.items():
             if col not in df.columns:
@@ -9305,100 +9487,141 @@ if pagina == "🤖 Assistente IA":
         df["data_dt"] = pd.to_datetime(df["data_analise"], errors="coerce", dayfirst=True)
         return df
 
+    contratos = _garantir_colunas_chat(contratos)
+    riscos = contratos["risco_norm"].astype(str)
+    total_base = len(contratos)
+    score_base = round(float(contratos["score_num"].mean()), 1) if total_base else 0
+    assinados_base = int(contratos["contrato_assinado"].astype(str).str.upper().str.strip().isin(["SIM", "ASSINADO", "VALIDADO"]).sum())
+
+    st.markdown(
+        f'''
+        <div class="ai-command-center">
+            <h3>Central de consulta contratual</h3>
+            <p>O assistente consulta somente as análises registradas no histórico. As respostas não substituem a validação jurídica ou operacional.</p>
+            <div class="ai-base-grid">
+                <div class="ai-base-card"><small>Contratos disponíveis</small><strong>{total_base}</strong></div>
+                <div class="ai-base-card"><small>Risco alto</small><strong>{int((riscos == "ALTO").sum())}</strong></div>
+                <div class="ai-base-card"><small>Assinados</small><strong>{assinados_base}</strong></div>
+                <div class="ai-base-card"><small>Score médio</small><strong>{score_base}</strong></div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    exemplos = [
+        "Quantos contratos existem?", "Quais contratos são de risco alto?", "Quais contratos são de risco médio?",
+        "Quais contratos são de risco baixo?", "Qual contrato tem maior valor?", "Qual contrato tem menor valor?",
+        "Qual contrato tem menor score?", "Qual contrato tem maior score?", "Qual é o score médio?",
+        "Quais contratos estão assinados?", "Quais contratos não estão assinados?", "Quais contratos são do Projuris?",
+        "Quais contratos são do Ariba?", "Quais contratos foram analisados pelo Gemini?", "Liste os últimos contratos analisados",
+    ]
+
+    st.markdown('<div class="ai-quick-label">Consultas rápidas</div>', unsafe_allow_html=True)
+    q1, q2, q3, q4 = st.columns(4)
+    pergunta_botao = None
+    if q1.button("🚨 Risco alto", use_container_width=True, key="ai_quick_risco_alto"):
+        pergunta_botao = "Quais contratos são de risco alto?"
+    if q2.button("📉 Menor score", use_container_width=True, key="ai_quick_menor_score"):
+        pergunta_botao = "Qual contrato tem menor score?"
+    if q3.button("✍️ Não assinados", use_container_width=True, key="ai_quick_nao_assinados"):
+        pergunta_botao = "Quais contratos não estão assinados?"
+    if q4.button("🕘 Últimos contratos", use_container_width=True, key="ai_quick_ultimos"):
+        pergunta_botao = "Liste os últimos contratos analisados"
+
+    escolha_col, limpar_col = st.columns([4, 1])
+    with escolha_col:
+        pergunta_exemplo = st.selectbox(
+            "Pergunta pronta",
+            exemplos,
+            index=None,
+            placeholder="Selecione uma pergunta pronta...",
+            key="assistente_ia_pergunta_pronta",
+            label_visibility="collapsed",
+        )
+    with limpar_col:
+        if st.button("Limpar consulta", use_container_width=True, key="assistente_limpar_consulta"):
+            st.session_state.pop("assistente_ultima_pergunta", None)
+            st.session_state.pop("assistente_ia_pergunta_pronta", None)
+            st.rerun()
+
+    pergunta_digitada = st.chat_input("Digite sua pergunta sobre os contratos analisados...")
+    pergunta_nova = (pergunta_digitada or pergunta_botao or pergunta_exemplo or "").strip()
+    if pergunta_nova:
+        st.session_state["assistente_ultima_pergunta"] = pergunta_nova
+    pergunta = str(st.session_state.get("assistente_ultima_pergunta", "")).strip()
+
     def _risco_style_chat(risco):
         risco = normalize_risco(risco)
         if risco == "ALTO":
-            return "#ff4d4d", "rgba(255,77,77,.15)"
+            return "#ff5a5f", "rgba(255,90,95,.14)"
         if risco in ["MÉDIO", "MEDIO"]:
-            return "#f59e0b", "rgba(245,158,11,.15)"
+            return "#f59e0b", "rgba(245,158,11,.14)"
         if risco == "BAIXO":
-            return "#22c55e", "rgba(34,197,94,.15)"
+            return "#22c55e", "rgba(34,197,94,.14)"
         return "#94a3b8", "rgba(148,163,184,.12)"
 
     def _render_pergunta_ia(texto):
-        st.markdown(
-            f'<div class="ai-question-card">🙋 {safe(texto)}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="ai-question-card">Consulta: {safe(texto)}</div>', unsafe_allow_html=True)
 
     def _render_texto_ia(titulo, texto):
         texto_html = safe(texto).replace("\n", "<br>")
         st.markdown(
-            f"""
-            <div class="ai-panel">
-                <div class="ai-answer-title">{safe(titulo)}</div>
-                <div class="ai-answer-text">{texto_html}</div>
-            </div>
-            """,
+            f'<div class="ai-panel"><div class="ai-answer-title">{safe(titulo)}</div><div class="ai-answer-text">{texto_html}</div></div>',
             unsafe_allow_html=True,
         )
 
-    def _render_resumo_ia(df: pd.DataFrame, titulo: str = "📊 Resumo Executivo"):
+    def _render_resumo_ia(df: pd.DataFrame, titulo: str = "Resumo executivo"):
         if df.empty:
             st.markdown(
-                f"""
-                <div class="ai-panel">
-                    <div class="ai-answer-title">{safe(titulo)}</div>
-                    <div class="ai-empty-box">Nenhum contrato encontrado para esta consulta.</div>
-                </div>
-                """,
+                f'<div class="ai-panel"><div class="ai-answer-title">{safe(titulo)}</div><div class="ai-empty-box">Nenhum contrato encontrado para esta consulta.</div></div>',
                 unsafe_allow_html=True,
             )
             return
-
-        riscos = df["risco_norm"].astype(str)
+        riscos_df = df["risco_norm"].astype(str)
         score_medio = round(pd.to_numeric(df["score_num"], errors="coerce").fillna(0).mean(), 1)
-        qtd_alto = int((riscos == "ALTO").sum())
-        qtd_medio = int((riscos == "MÉDIO").sum())
-        qtd_baixo = int((riscos == "BAIXO").sum())
         valor_total = float(pd.to_numeric(df["valor_num"], errors="coerce").fillna(0).sum())
         valor_fmt = _formatar_moeda_brasil(valor_total) if valor_total > 0 else "Não informado"
-
         st.markdown(
-            f"""
+            f'''
             <div class="ai-panel">
                 <div class="ai-answer-title">{safe(titulo)}</div>
                 <div class="ai-summary-grid">
                     <div class="ai-summary-card"><small>Contratos</small><strong>{len(df)}</strong></div>
-                    <div class="ai-summary-card"><small>Score Médio</small><strong>{score_medio}</strong></div>
-                    <div class="ai-summary-card"><small>Risco Alto</small><strong>{qtd_alto}</strong></div>
-                    <div class="ai-summary-card"><small>Risco Médio</small><strong>{qtd_medio}</strong></div>
-                    <div class="ai-summary-card"><small>Risco Baixo</small><strong>{qtd_baixo}</strong></div>
+                    <div class="ai-summary-card"><small>Score médio</small><strong>{score_medio}</strong></div>
+                    <div class="ai-summary-card"><small>Risco alto</small><strong>{int((riscos_df == "ALTO").sum())}</strong></div>
+                    <div class="ai-summary-card"><small>Risco médio</small><strong>{int((riscos_df == "MÉDIO").sum())}</strong></div>
+                    <div class="ai-summary-card"><small>Risco baixo</small><strong>{int((riscos_df == "BAIXO").sum())}</strong></div>
                 </div>
                 <div class="ai-mini-note">Valor somado dos registros encontrados: <b>{safe(valor_fmt)}</b>.</div>
             </div>
-            """,
-            unsafe_allow_html=True,
+            ''', unsafe_allow_html=True,
         )
 
     def _render_lista_contratos_ia(df: pd.DataFrame, limite: int = 10):
         if df.empty:
             return
-
         cards = []
         for _, r in df.head(limite).iterrows():
             cor, fundo = _risco_style_chat(r.get("risco"))
-            cards.append(f"""
+            cards.append(f'''
             <div class="ai-contract-card" style="--risk-color:{cor};--risk-bg:{fundo};">
-                <div class="ai-contract-title">{safe(r.get('fornecedor', 'Não informado'))}</div>
-                <div class="ai-risk-badge">● RISCO {safe(r.get('risco', 'N/A'))}</div>
+                <div class="ai-contract-title">{safe(r.get("fornecedor", "Não informado"))}</div>
+                <div class="ai-risk-badge">● RISCO {safe(r.get("risco", "N/A"))}</div>
                 <div class="ai-contract-grid">
-                    <div><div class="ai-info-label">CNPJ</div><div class="ai-info-value">{safe(r.get('cnpj'))}</div></div>
-                    <div><div class="ai-info-label">Score</div><div class="ai-info-value">{safe(r.get('score'))}</div></div>
-                    <div><div class="ai-info-label">Valor</div><div class="ai-info-value">{safe(r.get('valor_total'))}</div></div>
-                    <div><div class="ai-info-label">Status</div><div class="ai-info-value">{safe(r.get('status'))}</div></div>
-                    <div><div class="ai-info-label">Assinatura</div><div class="ai-info-value">{safe(r.get('contrato_assinado'))}</div></div>
-                    <div><div class="ai-info-label">Origem</div><div class="ai-info-value">{safe(r.get('tipo_origem'))}</div></div>
-                    <div><div class="ai-info-label">Modelo IA</div><div class="ai-info-value">{safe(r.get('modelo_ia'))}</div></div>
-                    <div><div class="ai-info-label">Data</div><div class="ai-info-value">{safe(r.get('data_analise'))}</div></div>
+                    <div><div class="ai-info-label">CNPJ</div><div class="ai-info-value">{safe(r.get("cnpj"))}</div></div>
+                    <div><div class="ai-info-label">Score</div><div class="ai-info-value">{safe(r.get("score"))}</div></div>
+                    <div><div class="ai-info-label">Valor</div><div class="ai-info-value">{safe(r.get("valor_total"))}</div></div>
+                    <div><div class="ai-info-label">Status</div><div class="ai-info-value">{safe(r.get("status"))}</div></div>
+                    <div><div class="ai-info-label">Assinatura</div><div class="ai-info-value">{safe(r.get("contrato_assinado"))}</div></div>
+                    <div><div class="ai-info-label">Origem</div><div class="ai-info-value">{safe(r.get("tipo_origem"))}</div></div>
+                    <div><div class="ai-info-label">Modelo IA</div><div class="ai-info-value">{safe(r.get("modelo_ia"))}</div></div>
+                    <div><div class="ai-info-label">Data</div><div class="ai-info-value">{safe(r.get("data_analise"))}</div></div>
                 </div>
-                <div class="ai-mini-note">Arquivo: {safe(r.get('arquivo'))}</div>
-            </div>
-            """)
-
+                <div class="ai-mini-note">Arquivo: {safe(r.get("arquivo"))}</div>
+            </div>''')
         if len(df) > limite:
-            cards.append(f'<div class="ai-mini-note">Exibindo {limite} de {len(df)} contratos encontrados. Faça uma busca mais específica para reduzir a lista.</div>')
-
+            cards.append(f'<div class="ai-mini-note">Exibindo {limite} de {len(df)} contratos. Refine a consulta para reduzir a lista.</div>')
         st.markdown("\n".join(cards), unsafe_allow_html=True)
 
     def _render_conjunto_ia(titulo: str, df_resultado: pd.DataFrame, limite: int = 10):
@@ -9410,109 +9633,80 @@ if pagina == "🤖 Assistente IA":
         _render_lista_contratos_ia(pd.DataFrame([row]), limite=1)
 
     def _responder_ia(pergunta_original: str):
-        df = _garantir_colunas_chat(contratos)
+        df = contratos.copy()
         pergunta_lower = pergunta_original.lower().strip()
         _render_pergunta_ia(pergunta_original)
-
         try:
             if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
-                _render_texto_ia(
-                    "Olá!",
-                    "Eu sou o Assistente Auditor. Posso consultar quantidade de contratos, riscos, scores, valores, origem, assinatura, modelo de IA e histórico das análises.",
-                )
-
+                _render_texto_ia("Olá!", "Posso consultar quantidade, riscos, scores, valores, assinatura, origem, modelo de IA e histórico das análises.")
             elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
                 _render_texto_ia("Total de contratos", f"Existem {len(df)} contrato(s) cadastrados no histórico.")
                 _render_resumo_ia(df)
-
             elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
                 _render_conjunto_ia("Contratos de risco alto", df[df["risco_norm"] == "ALTO"], limite=25)
-
             elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
                 _render_conjunto_ia("Contratos de risco médio", df[df["risco_norm"] == "MÉDIO"], limite=25)
-
             elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
                 _render_conjunto_ia("Contratos de risco baixo", df[df["risco_norm"] == "BAIXO"], limite=25)
-
             elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
-                base_valor = df.sort_values("valor_num", ascending=False)
-                if base_valor.empty:
-                    _render_texto_ia("Maior valor", "Nenhum contrato encontrado.")
-                else:
-                    _render_um_contrato_ia("Contrato com maior valor", base_valor.iloc[0])
-
+                base = df.sort_values("valor_num", ascending=False)
+                _render_um_contrato_ia("Contrato com maior valor", base.iloc[0]) if not base.empty else _render_texto_ia("Maior valor", "Nenhum contrato encontrado.")
             elif texto_tem(pergunta_lower, ["menor valor", "valor mais baixo", "contrato mais barato"]):
-                base_valor = df[df["valor_num"] > 0].sort_values("valor_num", ascending=True)
-                if base_valor.empty:
-                    _render_texto_ia("Menor valor", "Nenhum contrato com valor numérico localizado.")
-                else:
-                    _render_um_contrato_ia("Contrato com menor valor", base_valor.iloc[0])
-
+                base = df[df["valor_num"] > 0].sort_values("valor_num", ascending=True)
+                _render_um_contrato_ia("Contrato com menor valor", base.iloc[0]) if not base.empty else _render_texto_ia("Menor valor", "Nenhum contrato com valor numérico localizado.")
             elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
-                base_score = df.sort_values("score_num", ascending=True)
-                _render_um_contrato_ia("Contrato com menor score", base_score.iloc[0])
-
+                base = df.sort_values("score_num", ascending=True)
+                _render_um_contrato_ia("Contrato com menor score", base.iloc[0]) if not base.empty else _render_texto_ia("Menor score", "Nenhum contrato encontrado.")
             elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
-                base_score = df.sort_values("score_num", ascending=False)
-                _render_um_contrato_ia("Contrato com maior score", base_score.iloc[0])
-
+                base = df.sort_values("score_num", ascending=False)
+                _render_um_contrato_ia("Contrato com maior score", base.iloc[0]) if not base.empty else _render_texto_ia("Maior score", "Nenhum contrato encontrado.")
             elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
                 media = round(float(df["score_num"].mean()), 1) if not df.empty else 0
                 _render_texto_ia("Score médio", f"O score médio dos contratos é {media}.")
                 _render_resumo_ia(df)
-
             elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados", "contrato não assinado", "contrato nao assinado"]):
                 ass = df["contrato_assinado"].astype(str).str.upper().str.strip()
-                _render_conjunto_ia("Contratos não assinados", df[ass != "SIM"], limite=25)
-
+                _render_conjunto_ia("Contratos não assinados", df[~ass.isin(["SIM", "ASSINADO", "VALIDADO"])], limite=25)
             elif texto_tem(pergunta_lower, ["contratos assinados", "estão assinados", "estao assinados", "com assinatura", "contrato assinado"]):
                 ass = df["contrato_assinado"].astype(str).str.upper().str.strip()
-                _render_conjunto_ia("Contratos assinados", df[ass == "SIM"], limite=25)
-
+                _render_conjunto_ia("Contratos assinados", df[ass.isin(["SIM", "ASSINADO", "VALIDADO"])], limite=25)
             elif texto_tem(pergunta_lower, ["projuris"]):
-                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)]
-                _render_conjunto_ia("Contratos do Projuris", filtro, limite=25)
-
+                _render_conjunto_ia("Contratos do Projuris", df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)], limite=25)
             elif texto_tem(pergunta_lower, ["ariba"]):
-                filtro = df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)]
-                _render_conjunto_ia("Contratos do Ariba", filtro, limite=25)
-
+                _render_conjunto_ia("Contratos do Ariba", df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)], limite=25)
             elif texto_tem(pergunta_lower, ["gemini", "modelo ia", "inteligência artificial", "inteligencia artificial", "analisados pela ia", "analisados pelo gemini"]) or re.search(r"\bia\b", pergunta_lower):
-                filtro = df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)]
-                _render_conjunto_ia("Contratos analisados pelo Gemini", filtro, limite=25)
-
+                _render_conjunto_ia("Contratos analisados pelo Gemini", df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)], limite=25)
             elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises", "últimos contratos", "ultimos contratos"]):
                 ultimos = df.sort_values(["data_dt", "id"], ascending=[False, False], na_position="last").head(10)
                 _render_conjunto_ia("Últimos contratos analisados", ultimos, limite=10)
-
             else:
-                busca = re.escape(pergunta_lower)
-                cols = [
-                    "fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco",
-                    "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise",
-                ]
+                busca = pergunta_lower
+                cols = ["fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise"]
                 mask = pd.Series(False, index=df.index)
                 for col in cols:
-                    mask = mask | df[col].astype(str).str.lower().str.contains(busca, na=False, regex=True)
-                resultado = df[mask]
-                if resultado.empty:
-                    _render_texto_ia(
-                        "Nenhum resultado encontrado",
-                        "Não encontrei contratos relacionados a essa busca. Pesquise por fornecedor, CNPJ, valor, risco, status, origem, modelo IA ou nome do arquivo.",
-                    )
+                    mask = mask | df[col].astype(str).str.lower().str.contains(busca, na=False, regex=False)
+                resultado_busca = df[mask]
+                if resultado_busca.empty:
+                    _render_texto_ia("Nenhum resultado encontrado", "Pesquise por contraparte, CNPJ, valor, risco, status, assinatura, origem, modelo de IA ou nome do arquivo.")
                 else:
-                    _render_conjunto_ia("Resultado da busca", resultado, limite=50)
-
+                    _render_conjunto_ia("Resultado da busca", resultado_busca, limite=50)
         except Exception as erro:
             _render_texto_ia("Erro ao consultar histórico", f"Ocorreu um erro ao consultar o histórico: {erro}")
 
     if pergunta:
         _responder_ia(pergunta)
     else:
-        _render_texto_ia(
-            "Como consultar",
-            "Escolha uma pergunta pronta acima ou digite sua dúvida no campo inferior. As respostas agora são renderizadas em cards visuais, sem exibir HTML ou código na tela.",
+        st.markdown(
+            '''
+            <div class="ai-guide-grid">
+                <div class="ai-guide-card"><b>Riscos e prioridades</b><span>Liste contratos de risco alto, médio ou baixo e identifique os registros que exigem revisão.</span></div>
+                <div class="ai-guide-card"><b>Valores e qualidade</b><span>Consulte maior ou menor valor, score médio e contratos com menor qualidade de extração.</span></div>
+                <div class="ai-guide-card"><b>Assinatura e origem</b><span>Localize contratos assinados, não validados, Projuris, Ariba ou analisados por determinado modelo.</span></div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
         )
+        _render_texto_ia("Como consultar", "Use uma pergunta rápida, selecione uma consulta pronta ou escreva sua própria pergunta no campo inferior.")
 
     st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
@@ -9868,60 +10062,47 @@ if pagina == "📄 Nova Análise":
 # HISTÓRICO
 # =========================================================
 if pagina == "📚 Histórico":
-    render_hero("Histórico", "Consulta executiva dos contratos analisados, com filtros, indicadores e relatórios.")
+    inject_professional_page_css("historico")
+    render_hero("Histórico", "Consulta completa das análises salvas, com filtros, indicadores, exportação e auditoria técnica.")
 
     historico = carregar_historico_seguro()
-
     if historico.empty:
-        st.info("Nenhuma análise salva ainda.")
+        st.markdown('<div class="mgmt-empty"><strong>Nenhuma análise salva</strong>O histórico será preenchido automaticamente após a conclusão da primeira análise.</div>', unsafe_allow_html=True)
         st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
-    # -------------------------
-    # Preparação dos dados
-    # -------------------------
     hist = historico.copy()
-    for col in ["fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise"]:
+    colunas_base = ["fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise"]
+    for col in colunas_base:
         if col not in hist.columns:
             hist[col] = "Não informado"
+        hist[col] = hist[col].fillna("Não informado")
 
-    hist["risco_norm"] = hist["risco"].astype(str).str.upper().replace({"MEDIO": "MÉDIO"})
+    hist["risco_norm"] = hist["risco"].astype(str).str.upper().str.strip().replace({"MEDIO": "MÉDIO"})
     hist["score_num"] = hist["score"].apply(as_float_score)
-    hist["data_dt"] = pd.to_datetime(hist["data_analise"], format="%d/%m/%Y %H:%M", errors="coerce")
+    hist["data_dt"] = pd.to_datetime(hist["data_analise"], errors="coerce", dayfirst=True)
 
     total_hist = int(len(hist))
     qtd_alto = int((hist["risco_norm"] == "ALTO").sum())
     qtd_medio = int((hist["risco_norm"] == "MÉDIO").sum())
     qtd_baixo = int((hist["risco_norm"] == "BAIXO").sum())
-    qtd_assinado = int(hist["contrato_assinado"].astype(str).str.upper().eq("SIM").sum())
+    assinatura_norm = hist["contrato_assinado"].astype(str).str.upper().str.strip()
+    qtd_assinado = int(assinatura_norm.isin(["SIM", "ASSINADO", "VALIDADO"]).sum())
     score_medio_hist = round(float(hist["score_num"].mean()), 1) if total_hist else 0
 
-    # -------------------------
-    # Indicadores executivos
-    # -------------------------
-    st.markdown('<div class="section-title">Painel do histórico</div>', unsafe_allow_html=True)
-    h1, h2, h3, h4, h5 = st.columns(5)
-    h1.markdown(render_metric("Contratos", total_hist), unsafe_allow_html=True)
-    h2.markdown(render_metric("Risco alto", qtd_alto), unsafe_allow_html=True)
-    h3.markdown(render_metric("Risco médio", qtd_medio), unsafe_allow_html=True)
-    h4.markdown(render_metric("Risco baixo", qtd_baixo), unsafe_allow_html=True)
-    h5.markdown(render_metric("Score médio", score_medio_hist), unsafe_allow_html=True)
+    render_management_kpis([
+        {"label": "Contratos", "value": total_hist, "note": "registros no histórico", "tone": "green"},
+        {"label": "Assinados", "value": qtd_assinado, "note": "evidência localizada", "tone": "info"},
+        {"label": "Risco alto", "value": qtd_alto, "note": "prioridade máxima", "tone": "high"},
+        {"label": "Risco médio", "value": qtd_medio, "note": "revisão recomendada", "tone": "medium"},
+        {"label": "Risco baixo", "value": qtd_baixo, "note": "sem alerta crítico", "tone": "low"},
+        {"label": "Score médio", "value": score_medio_hist, "note": "qualidade da base", "tone": "gold"},
+    ])
 
     st.markdown(
-        f"""
-        <div class="executive-box">
-            <h3>📚 Visão executiva do histórico</h3>
-            <p>Existem <b>{total_hist}</b> análise(s) registrada(s), sendo <b>{qtd_baixo}</b> de risco baixo, <b>{qtd_medio}</b> de risco médio e <b>{qtd_alto}</b> de risco alto.</p>
-            <p><b>{qtd_assinado}</b> contrato(s) possuem evidência de assinatura registrada no histórico.</p>
-        </div>
-        """,
+        f'<div class="mgmt-callout"><h3>Visão executiva do histórico</h3><p>A base possui <b>{total_hist}</b> análise(s), com <b>{qtd_assinado}</b> contrato(s) assinados e <b>{qtd_alto}</b> registro(s) de risco alto.</p></div>',
         unsafe_allow_html=True,
     )
-
-    # -------------------------
-    # Filtros profissionais
-    # -------------------------
-    st.markdown('<div class="section-title">Filtros</div>', unsafe_allow_html=True)
 
     riscos_disponiveis = [r for r in ["ALTO", "MÉDIO", "BAIXO"] if r in set(hist["risco_norm"].dropna().astype(str))]
     origens_disponiveis = sorted([x for x in hist["tipo_origem"].dropna().astype(str).unique() if x and x != "Não informado"])
@@ -9929,39 +10110,43 @@ if pagina == "📚 Histórico":
     modelos_disponiveis = sorted([x for x in hist["modelo_ia"].dropna().astype(str).unique() if x])
     status_disponiveis = sorted([x for x in hist["status"].dropna().astype(str).unique() if x])
 
-    with st.container(border=True):
-        st.markdown("#### 🔎 Consulta do histórico")
-        st.caption("Use os filtros principais abaixo. Os filtros avançados ficam recolhidos para não poluir a tela.")
+    st.markdown('<div class="mgmt-section-head"><div><h2>Filtros de consulta</h2><p>Refine a base sem perder o contexto executivo.</p></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="history-filter-shell"><h3>Pesquisa do histórico</h3><p>Use os filtros principais ou abra as opções avançadas.</p></div>', unsafe_allow_html=True)
 
-        f1, f2, f3, f4 = st.columns([1.8, .8, .9, .9])
+    f1, f2, f3, f4 = st.columns([1.8, .8, .9, .9])
+    with f1:
+        busca = st.text_input("Buscar", placeholder="Contraparte, CNPJ, arquivo, status ou modelo...", key="hist_busca").strip()
+    with f2:
+        risco_opcao = st.selectbox("Risco", ["Todos"] + riscos_disponiveis, key="hist_risco")
+    with f3:
+        assinatura_opcao = st.selectbox("Assinatura", ["Todos"] + assinaturas_disponiveis, key="hist_assinatura")
+    with f4:
+        ordenar_por = st.selectbox("Ordenar por", ["Mais recentes", "Maior score", "Menor score", "Risco", "Contraparte"], key="hist_ordenar")
 
-        with f1:
-            busca = st.text_input(
-                "Buscar",
-                placeholder="Digite contraparte, CNPJ, arquivo, status ou modelo...",
-            ).strip()
+    with st.expander("⚙️ Filtros avançados", expanded=False):
+        a1, a2, a3, a4 = st.columns(4)
+        with a1:
+            origem_opcao = st.selectbox("Origem", ["Todas"] + origens_disponiveis, key="hist_origem")
+        with a2:
+            modelo_opcao = st.selectbox("Modelo IA", ["Todos"] + modelos_disponiveis, key="hist_modelo")
+        with a3:
+            status_opcao = st.selectbox("Status", ["Todos"] + status_disponiveis, key="hist_status")
+        with a4:
+            score_min, score_max = st.slider("Faixa de score", 0, 100, (0, 100), key="hist_score")
 
-        with f2:
-            risco_opcao = st.selectbox("Risco", ["Todos"] + riscos_disponiveis, index=0)
+    def _limpar_filtros_historico() -> None:
+        for chave in ["hist_busca", "hist_risco", "hist_assinatura", "hist_ordenar", "hist_origem", "hist_modelo", "hist_status", "hist_score", "hist_contrato_detalhado"]:
+            st.session_state.pop(chave, None)
 
-        with f3:
-            assinatura_opcao = st.selectbox("Assinatura", ["Todos"] + assinaturas_disponiveis, index=0)
+    reset_col, _ = st.columns([1, 4])
+    with reset_col:
+        st.button(
+            "↺ Limpar filtros",
+            use_container_width=True,
+            key="hist_limpar_filtros",
+            on_click=_limpar_filtros_historico,
+        )
 
-        with f4:
-            ordenar_por = st.selectbox("Ordenar por", ["Mais recentes", "Maior score", "Menor score", "Risco", "Contraparte"], index=0)
-
-        with st.expander("⚙️ Filtros avançados", expanded=False):
-            a1, a2, a3, a4 = st.columns([1, 1, 1, 1])
-            with a1:
-                origem_opcao = st.selectbox("Origem", ["Todas"] + origens_disponiveis, index=0)
-            with a2:
-                modelo_opcao = st.selectbox("Modelo IA", ["Todos"] + modelos_disponiveis, index=0)
-            with a3:
-                status_opcao = st.selectbox("Status", ["Todos"] + status_disponiveis, index=0)
-            with a4:
-                score_min, score_max = st.slider("Score", 0, 100, (0, 100))
-
-    # Converte seleção única em listas para reaproveitar a lógica de filtragem.
     riscos_sel = riscos_disponiveis if risco_opcao == "Todos" else [risco_opcao]
     origens_sel = origens_disponiveis if origem_opcao == "Todas" else [origem_opcao]
     assinatura_sel = assinaturas_disponiveis if assinatura_opcao == "Todos" else [assinatura_opcao]
@@ -9969,42 +10154,26 @@ if pagina == "📚 Histórico":
     status_sel = status_disponiveis if status_opcao == "Todos" else [status_opcao]
 
     filtrado = hist.copy()
-
     if busca:
         busca_lower = busca.lower()
         cols_busca = ["fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco", "modelo_ia", "tipo_origem", "arquivo", "data_analise"]
         mask = pd.Series(False, index=filtrado.index)
         for col in cols_busca:
-            mask = mask | filtrado[col].astype(str).str.lower().str.contains(busca_lower, na=False)
+            mask = mask | filtrado[col].astype(str).str.lower().str.contains(busca_lower, na=False, regex=False)
         filtrado = filtrado[mask]
 
     if riscos_sel:
         filtrado = filtrado[filtrado["risco_norm"].isin(riscos_sel)]
-    else:
-        filtrado = filtrado.iloc[0:0]
-
     if origens_disponiveis and origens_sel:
         filtrado = filtrado[filtrado["tipo_origem"].astype(str).isin(origens_sel)]
-    elif origens_disponiveis:
-        filtrado = filtrado.iloc[0:0]
-
     if assinatura_sel:
         filtrado = filtrado[filtrado["contrato_assinado"].astype(str).isin(assinatura_sel)]
-    else:
-        filtrado = filtrado.iloc[0:0]
-
     if modelos_sel:
         filtrado = filtrado[filtrado["modelo_ia"].astype(str).isin(modelos_sel)]
-    else:
-        filtrado = filtrado.iloc[0:0]
-
     if status_sel:
         filtrado = filtrado[filtrado["status"].astype(str).isin(status_sel)]
-    else:
-        filtrado = filtrado.iloc[0:0]
 
     filtrado = filtrado[(filtrado["score_num"] >= score_min) & (filtrado["score_num"] <= score_max)]
-
     if ordenar_por == "Mais recentes":
         filtrado = filtrado.sort_values(["data_dt", "id"], ascending=[False, False], na_position="last")
     elif ordenar_por == "Maior score":
@@ -10013,164 +10182,124 @@ if pagina == "📚 Histórico":
         filtrado = filtrado.sort_values("score_num", ascending=True)
     elif ordenar_por == "Risco":
         ordem_risco = {"ALTO": 1, "MÉDIO": 2, "BAIXO": 3}
-        filtrado["ordem_risco"] = filtrado["risco_norm"].map(ordem_risco).fillna(9)
-        filtrado = filtrado.sort_values(["ordem_risco", "score_num"], ascending=[True, True])
+        filtrado = filtrado.assign(ordem_risco=filtrado["risco_norm"].map(ordem_risco).fillna(9)).sort_values(["ordem_risco", "score_num"], ascending=[True, True])
     elif ordenar_por == "Contraparte":
         filtrado = filtrado.sort_values("fornecedor", ascending=True)
 
     st.markdown(
-        f'<div class="filter-note">🔎 Visualizando <b>{len(filtrado)}</b> de <b>{total_hist}</b> análise(s) do histórico.</div>',
+        f'<div class="history-count-note"><span>Resultado da consulta</span><span><strong>{len(filtrado)}</strong> de {total_hist} análise(s)</span></div>',
         unsafe_allow_html=True,
     )
 
-    # -------------------------
-    # Exportação filtrada
-    # -------------------------
     filtrado_export = filtrado.copy()
 
-    # Campos novos ficam dentro do resultado_json no histórico. Aqui extraímos para o Excel.
     def _hist_json_val(row, chave: str, padrao: str = "Não informado") -> str:
-        try:
-            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
-            valor = payload.get(chave, padrao)
-            if valor in (None, "", [], {}, "Não localizado", "Não localizada"):
-                return padrao
-            if isinstance(valor, (list, dict)):
-                return json.dumps(valor, ensure_ascii=False)
-            return str(valor)
-        except Exception:
+        payload = _hist_parse_resultado_json(row)
+        valor = payload.get(chave, padrao)
+        if valor in (None, "", [], {}, "Não localizado", "Não localizada"):
             return padrao
+        return json.dumps(valor, ensure_ascii=False) if isinstance(valor, (list, dict)) else str(valor)
 
     def _hist_json_nested_val(row, pai: str, chave: str, padrao: str = "Não informado") -> str:
-        try:
-            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
-            bloco = payload.get(pai, {}) if isinstance(payload, dict) else {}
-            valor = bloco.get(chave, padrao) if isinstance(bloco, dict) else padrao
-            if valor in (None, "", [], {}, "Não localizado", "Não localizada"):
-                return padrao
-            return str(valor)
-        except Exception:
-            return padrao
+        payload = _hist_parse_resultado_json(row)
+        bloco = payload.get(pai, {}) if isinstance(payload, dict) else {}
+        valor = bloco.get(chave, padrao) if isinstance(bloco, dict) else padrao
+        return padrao if valor in (None, "", [], {}, "Não localizado", "Não localizada") else str(valor)
 
     def _hist_json_count(row, chave: str) -> int:
-        try:
-            payload = json.loads(row.get("resultado_json") or "{}") if isinstance(row.get("resultado_json"), str) else {}
-            valor = payload.get(chave, []) if isinstance(payload, dict) else []
-            return len(valor) if isinstance(valor, list) else 0
-        except Exception:
-            return 0
+        payload = _hist_parse_resultado_json(row)
+        valor = payload.get(chave, []) if isinstance(payload, dict) else []
+        return len(valor) if isinstance(valor, list) else 0
 
     if "resultado_json" in filtrado_export.columns:
         campos_json_excel = {
-            "valor_mensal_estimado": "valor_mensal_estimado",
-            "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
-            "valor_total_materiais_servicos": "valor_total_materiais_servicos",
-            "data_contrato": "data_contrato",
-            "data_conclusao_docusign": "data_conclusao_docusign",
-            "pessoas_que_assinaram": "pessoas_que_assinaram",
+            "valor_mensal_estimado": "valor_mensal_estimado", "valor_total_estimado_vigencia": "valor_total_estimado_vigencia",
+            "valor_total_materiais_servicos": "valor_total_materiais_servicos", "data_contrato": "data_contrato",
+            "data_conclusao_docusign": "data_conclusao_docusign", "pessoas_que_assinaram": "pessoas_que_assinaram",
             "resumo_aditivos": "resumo_aditivos",
         }
         for destino, chave_json in campos_json_excel.items():
             if destino not in filtrado_export.columns:
                 filtrado_export[destino] = filtrado_export.apply(lambda row, ch=chave_json: _hist_json_val(row, ch), axis=1)
-
         campos_processamento_excel = {
-            "triagem_total_arquivos": ("resumo_processamento", "total_arquivos"),
-            "triagem_analise_ia": ("resumo_processamento", "analise_profunda"),
-            "triagem_apoio": ("resumo_processamento", "apoio"),
-            "triagem_ignorados": ("resumo_processamento", "ignorados"),
-            "tempo_total_processamento": ("resumo_processamento", "tempo_total"),
-            "tempo_ia": ("resumo_processamento", "tempo_ia"),
+            "triagem_total_arquivos": ("resumo_processamento", "total_arquivos"), "triagem_analise_ia": ("resumo_processamento", "analise_profunda"),
+            "triagem_apoio": ("resumo_processamento", "apoio"), "triagem_ignorados": ("resumo_processamento", "ignorados"),
+            "tempo_total_processamento": ("resumo_processamento", "tempo_total"), "tempo_ia": ("resumo_processamento", "tempo_ia"),
         }
         for destino, (pai, chave_json) in campos_processamento_excel.items():
             if destino not in filtrado_export.columns:
                 filtrado_export[destino] = filtrado_export.apply(lambda row, pa=pai, ch=chave_json: _hist_json_nested_val(row, pa, ch), axis=1)
-
         if "qtd_aditivos" not in filtrado_export.columns:
             filtrado_export["qtd_aditivos"] = filtrado_export.apply(lambda row: _hist_json_count(row, "aditivos_contrato"), axis=1)
         if "qtd_itens_contrato" not in filtrado_export.columns:
             filtrado_export["qtd_itens_contrato"] = filtrado_export.apply(lambda row: _hist_json_count(row, "itens_contrato"), axis=1)
 
     export_cols = [
-        "id", "data_analise", "fornecedor", "cnpj", "valor_total",
-        "valor_mensal_estimado", "valor_total_estimado_vigencia", "valor_total_materiais_servicos",
-        "qtd_aditivos", "resumo_aditivos", "qtd_itens_contrato",
-        "data_contrato", "data_conclusao_docusign", "pessoas_que_assinaram",
-        "triagem_total_arquivos", "triagem_analise_ia", "triagem_apoio", "triagem_ignorados",
-        "tempo_total_processamento", "tempo_ia",
-        "vigencia", "status", "risco", "score", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
+        "id", "data_analise", "fornecedor", "cnpj", "valor_total", "valor_mensal_estimado", "valor_total_estimado_vigencia",
+        "valor_total_materiais_servicos", "qtd_aditivos", "resumo_aditivos", "qtd_itens_contrato", "data_contrato",
+        "data_conclusao_docusign", "pessoas_que_assinaram", "triagem_total_arquivos", "triagem_analise_ia", "triagem_apoio",
+        "triagem_ignorados", "tempo_total_processamento", "tempo_ia", "vigencia", "status", "risco", "score",
+        "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo",
     ]
     export_df = filtrado_export[[c for c in export_cols if c in filtrado_export.columns]].copy()
     export_df = export_df.rename(columns={
-        "id": "ID",
-        "data_analise": "Data da análise",
-        "fornecedor": "Contraparte",
-        "cnpj": "CNPJ",
-        "valor_total": "Valor total",
-        "valor_mensal_estimado": "Valor mensal estimado",
-        "valor_total_estimado_vigencia": "Valor total estimado da vigência",
-        "valor_total_materiais_servicos": "Valor total dos materiais e serviços",
-        "qtd_aditivos": "Qtd. aditivos",
-        "resumo_aditivos": "Resumo dos aditivos",
-        "qtd_itens_contrato": "Qtd. itens/serviços",
-        "data_contrato": "Data do contrato",
-        "data_conclusao_docusign": "Data conclusão DocuSign",
-        "pessoas_que_assinaram": "Pessoas que assinaram",
-        "triagem_total_arquivos": "Total de anexos",
-        "triagem_analise_ia": "Análise IA",
-        "triagem_apoio": "Apoio",
-        "triagem_ignorados": "Ignorados",
-        "tempo_total_processamento": "Tempo total processamento",
-        "tempo_ia": "Tempo IA",
-        "vigencia": "Vigência",
-        "status": "Status",
-        "risco": "Risco",
-        "score": "Score",
-        "contrato_assinado": "Assinado",
-        "modelo_ia": "Modelo IA",
-        "tipo_origem": "Origem",
-        "arquivo": "Arquivos analisados",
+        "id": "ID", "data_analise": "Data da análise", "fornecedor": "Contraparte", "cnpj": "CNPJ", "valor_total": "Valor total",
+        "valor_mensal_estimado": "Valor mensal estimado", "valor_total_estimado_vigencia": "Valor total estimado da vigência",
+        "valor_total_materiais_servicos": "Valor total dos materiais e serviços", "qtd_aditivos": "Qtd. aditivos",
+        "resumo_aditivos": "Resumo dos aditivos", "qtd_itens_contrato": "Qtd. itens/serviços", "data_contrato": "Data do contrato",
+        "data_conclusao_docusign": "Data conclusão DocuSign", "pessoas_que_assinaram": "Pessoas que assinaram",
+        "triagem_total_arquivos": "Total de anexos", "triagem_analise_ia": "Análise IA", "triagem_apoio": "Apoio",
+        "triagem_ignorados": "Ignorados", "tempo_total_processamento": "Tempo total processamento", "tempo_ia": "Tempo IA",
+        "vigencia": "Vigência", "status": "Status", "risco": "Risco", "score": "Score", "contrato_assinado": "Assinado",
+        "modelo_ia": "Modelo IA", "tipo_origem": "Origem", "arquivo": "Arquivos analisados",
     })
 
     excel_hist = gerar_excel_historico_profissional(export_df, total_geral=total_hist)
-
-    d1, d2 = st.columns([3, 1])
-    with d2:
+    _, export_col = st.columns([3, 1])
+    with export_col:
         st.download_button(
-            "📥 Baixar histórico filtrado",
-            data=excel_hist,
+            "📥 Baixar histórico filtrado", data=excel_hist,
             file_name=f"historico_auditor_contract_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True,
         )
 
-    # -------------------------
-    # Visualização
-    # -------------------------
-    st.markdown('<div class="section-title">Resultado do histórico</div>', unsafe_allow_html=True)
-
+    st.markdown('<div class="mgmt-section-head"><div><h2>Resultado do histórico</h2><p>Escolha a visualização mais adequada para a sua consulta.</p></div></div>', unsafe_allow_html=True)
     if filtrado.empty:
         st.warning("Nenhuma análise encontrada para os filtros selecionados.")
     else:
         tab_cards, tab_tabela, tab_auditoria = st.tabs(["📌 Cards executivos", "📋 Tabela executiva", "🧾 Auditoria técnica"])
-
         with tab_cards:
-            for _, row in filtrado.head(25).iterrows():
-                with st.container():
-                    st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
+            cards_df = filtrado.head(25).copy()
+            opcoes_detalhe = ["Não abrir análise completa"]
+            mapa_detalhe: Dict[str, int] = {}
+            for idx_card, (_, row_card) in enumerate(cards_df.iterrows()):
+                label = f"ID {clean_text(row_card.get('id'))} • {clean_text(row_card.get('fornecedor'))} • {clean_text(row_card.get('data_analise'))}"
+                opcoes_detalhe.append(label)
+                mapa_detalhe[label] = idx_card
 
-                    with st.expander("🔎 Abrir análise completa deste contrato", expanded=False):
-                        render_analise_completa_historico(row)
+            detalhe_escolhido = st.selectbox(
+                "Abrir análise completa",
+                opcoes_detalhe,
+                index=0,
+                key="hist_contrato_detalhado",
+                help="Apenas o contrato selecionado é carregado em detalhes, mantendo a página rápida.",
+            )
+
+            for _, row in cards_df.iterrows():
+                st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
 
             if len(filtrado) > 25:
                 st.info("Exibindo os 25 primeiros registros filtrados. Use os filtros ou a tabela executiva para consultar os demais.")
 
+            if detalhe_escolhido != "Não abrir análise completa":
+                posicao = mapa_detalhe.get(detalhe_escolhido)
+                if posicao is not None:
+                    row_detalhe = cards_df.iloc[posicao]
+                    st.markdown('<div class="mgmt-section-head"><div><h2>Análise completa selecionada</h2><p>Detalhamento documental, financeiro e técnico do contrato escolhido.</p></div></div>', unsafe_allow_html=True)
+                    render_analise_completa_historico(row_detalhe)
         with tab_tabela:
-            tabela = export_df.copy()
             st.dataframe(
-                tabela,
-                use_container_width=True,
-                hide_index=True,
+                export_df, use_container_width=True, hide_index=True,
                 column_config={
                     "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100),
                     "Risco": st.column_config.TextColumn("Risco"),
@@ -10178,25 +10307,14 @@ if pagina == "📚 Histórico":
                     "Arquivos analisados": st.column_config.TextColumn("Arquivos analisados", width="large"),
                 },
             )
-
         with tab_auditoria:
             auditoria_cols = [c for c in ["id", "data_criacao", "data_analise", "modelo_ia", "tipo_origem", "risco", "score", "status", "contrato_assinado", "arquivo"] if c in filtrado.columns]
-            st.dataframe(
-                filtrado[auditoria_cols].rename(columns={
-                    "id": "ID",
-                    "data_criacao": "Criado em",
-                    "data_analise": "Data análise",
-                    "modelo_ia": "Modelo IA",
-                    "tipo_origem": "Origem",
-                    "risco": "Risco",
-                    "score": "Score",
-                    "status": "Status",
-                    "contrato_assinado": "Assinado",
-                    "arquivo": "Arquivo",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+            auditoria = filtrado[auditoria_cols].rename(columns={
+                "id": "ID", "data_criacao": "Criado em", "data_analise": "Data análise", "modelo_ia": "Modelo IA",
+                "tipo_origem": "Origem", "risco": "Risco", "score": "Score", "status": "Status",
+                "contrato_assinado": "Assinado", "arquivo": "Arquivo",
+            })
+            st.dataframe(auditoria, use_container_width=True, hide_index=True)
 
     st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
