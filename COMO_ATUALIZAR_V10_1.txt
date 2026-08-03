@@ -1,0 +1,25 @@
+AUDITOR DE CONTRATOS - ATUALIZACAO V10.1 DD FINAL
+
+O que foi ajustado:
+- Condicao de Pagamento em Dias sempre no formato NDD.
+- 30DD, 30 DDL e 30DDF sao normalizados para 30DD.
+- "vencimento no/ate o dia 15 do mes subsequente" retorna 15DD.
+- Prazos operacionais, como entrega de relatorio em 5 dias, nao alimentam o card.
+- Regras ja aprovadas de tabela comercial, Local de Prestacao e assinaturas foram preservadas.
+
+Como atualizar:
+1. Feche o Streamlit.
+2. Faça uma copia de seguranca da pasta atual.
+3. Extraia este ZIP sobre a pasta do projeto.
+4. Mantenha o seu arquivo .env atual e o seu nexus_contract.db atual.
+5. No terminal, execute:
+
+   python teste_condicao_pagamento_v10.py
+   python teste_tabela_comercial_completa.py
+   python teste_regressao_v10_sbf.py
+   streamlit run app.py
+
+Resultado esperado para o PDF SBF:
+- Condicao de Pagamento em Dias: 15DD
+- Fonte: pagina 26, Anexo II
+- O prazo operacional de 5 dias da pagina 18 deve ser ignorado.

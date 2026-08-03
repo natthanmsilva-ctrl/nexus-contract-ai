@@ -27,4 +27,17 @@ valor, pagina, _ = _extrair_condicao_pagamento_dd_documental({
 })
 assert valor == "" and pagina == ""
 
+
+# Abreviações de compras devem ser consolidadas no padrão oficial DD.
+valor, pagina, _ = _extrair_condicao_pagamento_dd_documental({
+    7: "Condição de pagamento: 30 DDL após o recebimento da nota fiscal."
+})
+assert valor == "30DD" and pagina == "7"
+
+# A redação 'no dia' também representa o card executivo aprovado.
+valor, pagina, _ = _extrair_condicao_pagamento_dd_documental({
+    9: "A fatura terá vencimento no dia 15 do mês subsequente à prestação."
+})
+assert valor == "15DD" and pagina == "9"
+
 print("OK - V10: cláusula financeira prevalece e prazos operacionais são rejeitados")
