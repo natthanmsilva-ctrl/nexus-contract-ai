@@ -8877,6 +8877,67 @@ def render_historico_card_executivo(row: pd.Series) -> str:
 """
     return "\n".join(line.strip() for line in html_card.splitlines() if line.strip())
 
+def _recuperar_itens_contrato_historico(
+    resultado: Dict[str, Any],
+    texto_extraido: str,
+) -> Dict[str, Any]:
+    """Recupera a tabela comercial de registros antigos do Histórico.
+
+    Algumas análises antigas salvaram as métricas da tabela (por exemplo, 21 itens),
+    mas não persistiram a lista ``itens_contrato`` dentro do JSON. Nesta situação,
+    o Histórico refaz somente a extração determinística a partir do texto já salvo.
+    A aba Nova Análise e o processamento original não são alterados.
+    """
+    base = dict(resultado or {})
+
+    try:
+        itens_existentes = normalizar_itens_contrato(base.get("itens_contrato", []))
+    except Exception:
+        itens_existentes = []
+
+    if itens_existentes:
+        base["itens_contrato"] = itens_existentes
+        return base
+
+    texto_base = str(texto_extraido or base.get("texto_extraido") or "").strip()
+    if not texto_base:
+        return base
+
+    try:
+        itens_documentais = extrair_tabela_comercial_completa(texto_base)
+        itens_fallback = [] if itens_documentais else extrair_itens_local(texto_base)
+        itens_recuperados = mesclar_itens_comerciais(
+            itens_documentais,
+            [],
+            itens_fallback,
+        )
+        itens_recuperados = normalizar_itens_contrato(itens_recuperados)
+
+        if not itens_recuperados:
+            return base
+
+        base["itens_contrato"] = itens_recuperados
+
+        metricas_antigas = (
+            dict(base.get("metricas_tabela_comercial"))
+            if isinstance(base.get("metricas_tabela_comercial"), dict)
+            else {}
+        )
+        metricas_novas = calcular_metricas_tabela_comercial(
+            itens_documentais,
+            itens_recuperados,
+        )
+        metricas_antigas.update(metricas_novas)
+        base["metricas_tabela_comercial"] = metricas_antigas
+        base["itens_contrato_recuperados_historico"] = True
+    except Exception:
+        # O Histórico deve continuar abrindo mesmo que um registro muito antigo
+        # não permita reconstruir sua tabela comercial.
+        return base
+
+    return base
+
+
 def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], str]:
     """Recupera do histórico o JSON completo salvo na análise."""
     resultado: Dict[str, Any] = {}
@@ -8934,6 +8995,10 @@ def obter_resultado_completo_historico(row: pd.Series) -> tuple[Dict[str, Any], 
         resultado = normalizar(resultado)
     except Exception:
         pass
+
+    # Compatibilidade com análises antigas que salvaram a contagem/métricas,
+    # porém não gravaram a lista completa de materiais e serviços no JSON.
+    resultado = _recuperar_itens_contrato_historico(resultado, texto_extraido)
 
     return resultado, texto_extraido
 
