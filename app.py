@@ -8813,7 +8813,7 @@ def render_historico_card_executivo(row: pd.Series) -> str:
 
     # O relatório completo não é mais incorporado em base64 dentro de cada card.
     # Isso deixa o Histórico leve mesmo com muitos registros.
-    excel_html = '<span class="history-chip-v2">🔎 Abra no seletor de análise completa</span>'
+    excel_html = '<span class="history-card-open-note">🔎 <b>Análise completa disponível</b></span>'
 
     html_card = f"""
 <div class="history-card-v2">
@@ -9100,24 +9100,38 @@ def inject_professional_page_css(page: str) -> None:
     .dash-quality-item{padding:15px;border-radius:15px;background:rgba(255,255,255,.04);border:1px solid rgba(215,191,117,.14);}
     .dash-quality-item small{display:block;color:#9aa8b8;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;}
     .dash-quality-item strong{display:block;color:#fff;font-size:22px;font-weight:950;margin-top:8px;}
-    .dash-contract-card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(15,26,38,.98),rgba(7,14,22,.98));border:1px solid rgba(215,191,117,.20);border-radius:19px;padding:19px 20px;margin:0 0 13px;box-shadow:0 16px 38px rgba(0,0,0,.22);min-height:240px;}
-    .dash-contract-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--risk-color,#94a3b8);}
-    .dash-card-top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:14px;}
-    .dash-card-title{color:#fff;font-size:18px;line-height:1.25;font-weight:950;overflow-wrap:anywhere;}
-    .dash-card-date{color:#8fa0b2;font-size:10px;font-weight:800;margin-top:6px;}
-    .dash-risk-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:7px 10px;border-radius:999px;background:color-mix(in srgb,var(--risk-color) 13%, transparent);border:1px solid color-mix(in srgb,var(--risk-color) 32%, transparent);color:var(--risk-color);font-size:10px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;}
-    .dash-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:13px 0;}
-    .dash-card-field{padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.035);border:1px solid rgba(215,191,117,.12);min-width:0;}
-    .dash-card-field small{display:block;color:#9aa8b8;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;}
-    .dash-card-field strong{display:block;color:#edf3f8;font-size:12px;line-height:1.35;font-weight:850;overflow-wrap:anywhere;}
-    .dash-score-line{display:flex;align-items:center;gap:12px;margin-top:13px;}
-    .dash-score-line span{color:#d7bf75;font-size:11px;font-weight:900;min-width:63px;}
-    .dash-score-track{height:8px;flex:1;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;}
+
+    .dash-contract-card{position:relative;overflow:hidden;background:
+        radial-gradient(circle at top right,color-mix(in srgb,var(--risk-color,#94a3b8) 10%,transparent),transparent 34%),
+        linear-gradient(145deg,rgba(15,26,38,.99),rgba(7,14,22,.99));
+        border:1px solid rgba(215,191,117,.22);border-radius:22px;padding:0;margin:0 0 16px;
+        box-shadow:0 18px 44px rgba(0,0,0,.27);min-height:310px;}
+    .dash-contract-card::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:linear-gradient(90deg,var(--risk-color,#94a3b8),rgba(215,191,117,.85));}
+    .dash-card-head{padding:20px 20px 15px;display:flex;justify-content:space-between;gap:15px;align-items:flex-start;border-bottom:1px solid rgba(255,255,255,.065);}
+    .dash-card-title{color:#fff;font-size:19px;line-height:1.2;font-weight:950;overflow-wrap:anywhere;letter-spacing:-.015em;}
+    .dash-card-date{color:#8fa0b2;font-size:10px;font-weight:800;margin-top:7px;}
+    .dash-risk-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:8px 11px;border-radius:999px;background:color-mix(in srgb,var(--risk-color) 13%, transparent);border:1px solid color-mix(in srgb,var(--risk-color) 34%, transparent);color:var(--risk-color);font-size:10px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;}
+    .dash-card-body{padding:16px 20px 18px;}
+    .dash-card-highlight-grid{display:grid;grid-template-columns:.92fr 1.08fr;gap:11px;}
+    .dash-highlight{min-height:90px;padding:13px 14px;border-radius:15px;background:rgba(255,255,255,.038);border:1px solid rgba(215,191,117,.13);}
+    .dash-highlight small,.dash-meta-item small{display:block;color:#9aa8b8;font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.085em;margin-bottom:7px;}
+    .dash-highlight strong{display:block;color:#f2f6fa;font-size:13px;line-height:1.4;font-weight:900;overflow-wrap:anywhere;}
+    .dash-highlight.value strong{color:#f5e7ae;font-size:14px;}
+    .dash-card-meta{display:grid;grid-template-columns:1.25fr .85fr .85fr;gap:9px;margin-top:10px;}
+    .dash-meta-item{min-width:0;padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.065);}
+    .dash-meta-item b{display:block;color:#e8eef4;font-size:11px;line-height:1.3;font-weight:850;overflow-wrap:anywhere;}
+    .dash-score-line{display:grid;grid-template-columns:58px 1fr 32px;align-items:center;gap:10px;margin-top:15px;padding-top:14px;border-top:1px solid rgba(255,255,255,.065);}
+    .dash-score-line span{color:#d7bf75;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.07em;}
+    .dash-score-track{height:8px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;}
     .dash-score-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#007a5e,#d7bf75);}
-    .dash-score-line b{color:#fff;font-size:12px;}
-    .dash-card-foot{display:flex;justify-content:space-between;gap:10px;margin-top:13px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07);color:#91a0af;font-size:10px;font-weight:800;}
+    .dash-score-line b{color:#fff;font-size:12px;text-align:right;}
+    .dash-card-foot{display:flex;justify-content:space-between;gap:10px;margin-top:11px;color:#91a0af;font-size:10px;font-weight:800;}
     @media(max-width:1000px){.dash-overview-grid{grid-template-columns:1fr;}}
-    @media(max-width:700px){.dash-card-grid{grid-template-columns:1fr;}.dash-card-top,.dash-card-foot{flex-direction:column;}}
+    @media(max-width:760px){
+        .dash-card-highlight-grid,.dash-card-meta{grid-template-columns:1fr;}
+        .dash-card-head,.dash-card-foot{flex-direction:column;}
+        .dash-contract-card{min-height:unset;}
+    }
     </style>
     '''
 
@@ -9129,34 +9143,91 @@ def inject_professional_page_css(page: str) -> None:
     .history-count-note{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:13px 0 17px;padding:13px 16px;border-radius:15px;background:linear-gradient(135deg,rgba(0,91,70,.55),rgba(12,24,34,.92));border:1px solid rgba(0,166,125,.30);color:#e8f3ef;font-size:12px;font-weight:850;}
     .history-count-note strong{color:#fff;font-size:15px;}
     .history-card-v2{margin-top:16px!important;}
-    .history-actions-row{display:flex;justify-content:flex-end;margin:-4px 0 8px;}
+    .history-card-open-note{display:flex;align-items:center;gap:8px;color:#aab7c5;font-size:11px;font-weight:800;}
+    .history-card-open-note b{color:#f4e6ac;}
+    .history-selected-shell{margin:14px 0 22px;padding:18px 20px;border-radius:20px;background:linear-gradient(145deg,rgba(0,91,70,.24),rgba(8,16,24,.98));border:1px solid rgba(0,166,125,.34);box-shadow:0 18px 42px rgba(0,0,0,.22);}
+    .history-selected-shell h3{margin:0;color:#f4e6ac;font-size:18px;font-weight:950;}
+    .history-selected-shell p{margin:6px 0 0;color:#b4c1cd;font-size:12px;font-weight:750;}
     div[data-testid="stForm"]{border:0!important;padding:0!important;}
+    div[data-testid="stButton"] > button{
+        border-radius:13px!important;
+        border:1px solid rgba(215,191,117,.42)!important;
+        background:linear-gradient(135deg,rgba(0,94,72,.95),rgba(0,69,54,.95))!important;
+        color:#fff!important;font-weight:900!important;
+    }
+    div[data-testid="stButton"] > button:hover{border-color:#f0d98d!important;box-shadow:0 0 0 1px rgba(240,217,141,.28),0 10px 24px rgba(0,0,0,.18)!important;}
     </style>
     '''
 
     assistant_css = r'''
     <style>
-    .ai-command-center{background:radial-gradient(circle at top right,rgba(0,166,125,.12),transparent 32%),linear-gradient(145deg,rgba(14,25,36,.98),rgba(7,15,23,.98));border:1px solid rgba(215,191,117,.22);border-radius:22px;padding:22px 24px;margin:16px 0 20px;box-shadow:0 20px 48px rgba(0,0,0,.25);}
-    .ai-command-center h3{margin:0 0 5px;color:#fff;font-size:19px;font-weight:950;}
-    .ai-command-center p{margin:0;color:#9aa8b8;font-size:12px;font-weight:700;line-height:1.45;}
-    .ai-base-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-top:17px;}
-    .ai-base-card{padding:14px 15px;border-radius:15px;background:rgba(255,255,255,.04);border:1px solid rgba(215,191,117,.14);}
+    .ai-command-center{background:
+        radial-gradient(circle at top right,rgba(0,166,125,.14),transparent 34%),
+        linear-gradient(145deg,rgba(14,25,36,.99),rgba(7,15,23,.99));
+        border:1px solid rgba(215,191,117,.23);border-radius:22px;padding:22px 24px;margin:16px 0 20px;box-shadow:0 20px 48px rgba(0,0,0,.25);}
+    .ai-command-center h3{margin:0 0 6px;color:#fff;font-size:20px;font-weight:950;}
+    .ai-command-center p{margin:0;color:#a2afbd;font-size:12px;font-weight:700;line-height:1.5;}
+    .ai-base-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-top:18px;}
+    .ai-base-card{padding:15px 16px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid rgba(215,191,117,.15);}
     .ai-base-card small{display:block;color:#d7bf75;font-size:9px;text-transform:uppercase;letter-spacing:.09em;font-weight:950;}
-    .ai-base-card strong{display:block;color:#fff;font-size:22px;font-weight:950;margin-top:7px;}
-    .ai-quick-label{color:#d7bf75;font-size:12px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin:6px 0 10px;}
+    .ai-base-card strong{display:block;color:#fff;font-size:23px;font-weight:950;margin-top:8px;}
+
+    .ai-consult-shell{background:linear-gradient(145deg,rgba(13,23,34,.98),rgba(7,14,22,.98));border:1px solid rgba(215,191,117,.20);border-radius:21px;padding:20px 21px 17px;margin:16px 0 18px;box-shadow:0 18px 42px rgba(0,0,0,.22);}
+    .ai-consult-shell h3{margin:0 0 5px;color:#f4e6ac;font-size:18px;font-weight:950;}
+    .ai-consult-shell p{margin:0 0 14px;color:#9ba9b8;font-size:12px;font-weight:700;}
+    .ai-quick-label{color:#d7bf75;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.10em;margin:17px 0 9px;}
+    .ai-input-note{margin:10px 0 0;color:#8fa0b2;font-size:11px;font-weight:750;}
     .ai-guide-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:15px 0;}
     .ai-guide-card{padding:18px;border-radius:17px;background:linear-gradient(145deg,rgba(17,29,41,.96),rgba(9,17,25,.96));border:1px solid rgba(215,191,117,.16);}
     .ai-guide-card b{display:block;color:#fff;font-size:15px;margin-bottom:7px;}
     .ai-guide-card span{color:#9aa8b8;font-size:12px;line-height:1.45;font-weight:700;}
-    .ai-panel{background:linear-gradient(145deg,#101b27,#0a131c)!important;border:1px solid rgba(215,191,117,.19)!important;border-radius:19px!important;padding:21px 22px!important;margin:15px 0!important;box-shadow:0 18px 42px rgba(0,0,0,.22)!important;}
-    .ai-question-card{background:linear-gradient(135deg,rgba(0,91,70,.70),rgba(15,28,39,.94))!important;border:1px solid rgba(0,166,125,.35)!important;border-left:4px solid #d7bf75!important;border-radius:16px!important;color:#fff!important;}
-    .ai-answer-title{color:#d7bf75!important;font-size:19px!important;}
-    .ai-contract-card{background:linear-gradient(145deg,#111d29,#09131c)!important;border-color:rgba(215,191,117,.15)!important;border-radius:18px!important;}
-    .ai-summary-card{background:rgba(255,255,255,.04)!important;border-color:rgba(215,191,117,.13)!important;}
-    div[data-baseweb="select"] > div:focus-within{border-color:#d7bf75!important;box-shadow:0 0 0 1px rgba(215,191,117,.45)!important;}
-    div[data-testid="stChatInput"]{border-top:1px solid rgba(215,191,117,.16);background:rgba(5,11,17,.96);}
-    div[data-testid="stChatInput"] textarea{border-color:rgba(215,191,117,.25)!important;}
-    @media(max-width:950px){.ai-base-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.ai-guide-grid{grid-template-columns:1fr;}}
+
+    .ai-question-card{padding:13px 16px;margin:12px 0 15px;background:linear-gradient(135deg,rgba(0,91,70,.70),rgba(15,28,39,.96));border:1px solid rgba(0,166,125,.38);border-left:4px solid #d7bf75;border-radius:16px;color:#fff;font-size:12px;font-weight:850;line-height:1.45;}
+    .ai-panel{background:linear-gradient(145deg,#101b27,#0a131c);border:1px solid rgba(215,191,117,.19);border-radius:19px;padding:21px 22px;margin:15px 0;box-shadow:0 18px 42px rgba(0,0,0,.22);}
+    .ai-answer-title{color:#f4d97f;font-size:19px;line-height:1.25;font-weight:950;margin-bottom:13px;}
+    .ai-answer-text{color:#e9eef5;font-size:13px;line-height:1.6;font-weight:720;}
+    .ai-empty-box{padding:16px;border-radius:14px;background:rgba(255,255,255,.035);border:1px dashed rgba(215,191,117,.20);color:#b8c3ce;font-size:12px;font-weight:750;}
+    .ai-summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;}
+    .ai-summary-card{padding:14px 13px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(215,191,117,.13);min-width:0;}
+    .ai-summary-card small{display:block;color:#9aa8b8;font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px;}
+    .ai-summary-card strong{display:block;color:#fff;font-size:21px;font-weight:950;line-height:1;}
+    .ai-mini-note{margin-top:12px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07);color:#9eacba;font-size:11px;font-weight:760;line-height:1.45;}
+    .ai-mini-note b{color:#f4e6ac;}
+
+    .ai-contract-list{display:grid;grid-template-columns:1fr;gap:13px;margin:14px 0 18px;}
+    .ai-contract-card{position:relative;overflow:hidden;background:
+        radial-gradient(circle at top right,var(--risk-bg),transparent 34%),
+        linear-gradient(145deg,#111d29,#09131c);
+        border:1px solid rgba(215,191,117,.17);border-radius:19px;padding:18px 19px 16px;box-shadow:0 16px 38px rgba(0,0,0,.22);}
+    .ai-contract-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--risk-color);}
+    .ai-contract-top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:13px;}
+    .ai-contract-title{color:#fff;font-size:18px;line-height:1.25;font-weight:950;overflow-wrap:anywhere;}
+    .ai-risk-badge{display:inline-flex;white-space:nowrap;padding:7px 10px;border-radius:999px;color:var(--risk-color);background:var(--risk-bg);border:1px solid color-mix(in srgb,var(--risk-color) 35%,transparent);font-size:9px;font-weight:950;letter-spacing:.07em;text-transform:uppercase;}
+    .ai-contract-grid{display:grid;grid-template-columns:1fr .55fr .9fr .9fr;gap:9px;}
+    .ai-contract-field{min-width:0;padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.032);border:1px solid rgba(255,255,255,.065);}
+    .ai-info-label{color:#8fa0b2;font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.09em;margin-bottom:6px;}
+    .ai-info-value{color:#edf3f8;font-size:11px;line-height:1.35;font-weight:850;overflow-wrap:anywhere;}
+    .ai-contract-financial{margin-top:9px;padding:12px 13px;border-radius:13px;background:rgba(215,191,117,.045);border:1px solid rgba(215,191,117,.13);}
+    .ai-contract-financial small{display:block;color:#d7bf75;font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.09em;margin-bottom:6px;}
+    .ai-contract-financial strong{display:block;color:#f1f5f9;font-size:11px;line-height:1.45;font-weight:820;overflow-wrap:anywhere;}
+    .ai-contract-footer{display:flex;justify-content:space-between;gap:10px;margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.065);color:#91a0af;font-size:9px;font-weight:800;}
+
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div{border-radius:13px!important;border-color:rgba(215,191,117,.25)!important;background:rgba(13,23,34,.96)!important;}
+    div[data-baseweb="input"] > div:focus-within,
+    div[data-baseweb="select"] > div:focus-within{border-color:#d7bf75!important;box-shadow:0 0 0 1px rgba(215,191,117,.40)!important;}
+    div[data-testid="stButton"] > button{border-radius:13px!important;font-weight:900!important;border-color:rgba(215,191,117,.42)!important;}
+    div[data-testid="stButton"] > button:hover{border-color:#f0d98d!important;box-shadow:0 0 0 1px rgba(240,217,141,.25)!important;}
+
+    @media(max-width:1050px){
+        .ai-base-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+        .ai-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr));}
+        .ai-contract-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+    }
+    @media(max-width:700px){
+        .ai-base-grid,.ai-summary-grid,.ai-contract-grid,.ai-guide-grid{grid-template-columns:1fr;}
+        .ai-contract-top,.ai-contract-footer{flex-direction:column;}
+    }
     </style>
     '''
 
@@ -9185,6 +9256,20 @@ def render_management_kpis(cards: List[Dict[str, Any]]) -> None:
 
 def render_dashboard_contract_card(row: Any) -> str:
     resultado = _hist_parse_resultado_json(row)
+
+    def _compactar(valor: Any, limite: int = 105) -> str:
+        texto = clean_text(valor).strip()
+        if texto in {"", "Não localizado", "Não localizada", "None", "nan"}:
+            return "Não informado"
+        # Para o Dashboard, prioriza a informação executiva e evita blocos extensos.
+        frases = re.split(r"(?<=[.!?])\s+", texto)
+        curto = frases[0].strip() if frases else texto
+        if len(curto) < 28 and len(frases) > 1:
+            curto = f"{curto} {frases[1].strip()}".strip()
+        if len(curto) > limite:
+            curto = curto[: limite - 1].rstrip(" ,;:.") + "…"
+        return curto
+
     fornecedor = _valor_presente(
         row.get("fornecedor") if hasattr(row, "get") else None,
         resultado.get("contraparte"),
@@ -9209,18 +9294,20 @@ def render_dashboard_contract_card(row: Any) -> str:
     )
     score = max(0.0, min(100.0, as_float_score(score_raw)))
     score_txt = f"{score:.0f}" if score.is_integer() else f"{score:.1f}"
-    valor = _valor_presente(
+
+    valor_original = _valor_presente(
         row.get("valor_total") if hasattr(row, "get") else None,
         resultado.get("valor_contrato_original"),
         resultado.get("valor_total"),
         padrao="Não informado",
     )
-    status = _valor_presente(
+    valor = _compactar(valor_original, 118)
+    status = _compactar(_valor_presente(
         row.get("status") if hasattr(row, "get") else None,
         resultado.get("status_contratual"),
         resultado.get("status"),
         padrao="Não informado",
-    )
+    ), 86)
     assinatura = _normalizar_assinatura(_valor_presente(
         row.get("contrato_assinado") if hasattr(row, "get") else None,
         resultado.get("contrato_assinado"),
@@ -9237,25 +9324,41 @@ def render_dashboard_contract_card(row: Any) -> str:
         padrao="Modelo não informado",
     )
     data = _data_exibicao_historico(row)
-    return f'''
+
+    return f"""
     <div class="dash-contract-card" style="--risk-color:{cor}">
-        <div class="dash-card-top">
+        <div class="dash-card-head">
             <div>
                 <div class="dash-card-title">{safe(fornecedor)}</div>
                 <div class="dash-card-date">Analisado em {safe(data)}</div>
             </div>
             <span class="dash-risk-badge">{safe(risco_label)}</span>
         </div>
-        <div class="dash-card-grid">
-            <div class="dash-card-field"><small>CNPJ</small><strong>{safe(cnpj)}</strong></div>
-            <div class="dash-card-field"><small>Valor</small><strong>{safe(valor)}</strong></div>
-            <div class="dash-card-field"><small>Status</small><strong>{safe(status)}</strong></div>
-            <div class="dash-card-field"><small>Assinatura</small><strong>{safe(assinatura)}</strong></div>
+        <div class="dash-card-body">
+            <div class="dash-card-highlight-grid">
+                <div class="dash-highlight">
+                    <small>Status contratual</small>
+                    <strong>{safe(status)}</strong>
+                </div>
+                <div class="dash-highlight value">
+                    <small>Valor / referência financeira</small>
+                    <strong>{safe(valor)}</strong>
+                </div>
+            </div>
+            <div class="dash-card-meta">
+                <div class="dash-meta-item"><small>CNPJ</small><b>{safe(cnpj)}</b></div>
+                <div class="dash-meta-item"><small>Assinatura</small><b>{safe(assinatura)}</b></div>
+                <div class="dash-meta-item"><small>Origem</small><b>{safe(origem)}</b></div>
+            </div>
+            <div class="dash-score-line">
+                <span>Score</span>
+                <div class="dash-score-track"><div class="dash-score-fill" style="width:{score}%"></div></div>
+                <b>{safe(score_txt)}</b>
+            </div>
+            <div class="dash-card-foot"><span>Modelo: {safe(modelo)}</span><span>{safe(risco_label)}</span></div>
         </div>
-        <div class="dash-score-line"><span>Score</span><div class="dash-score-track"><div class="dash-score-fill" style="width:{score}%"></div></div><b>{safe(score_txt)}</b></div>
-        <div class="dash-card-foot"><span>{safe(origem)}</span><span>{safe(modelo)}</span></div>
     </div>
-    '''
+    """
 
 
 def render_dashboard_distribution(total: int, alto: int, medio: int, baixo: int, assinados: int, score_medio: float) -> None:
@@ -9440,39 +9543,55 @@ if pagina == "🤖 Assistente IA":
     inject_professional_page_css("assistente ia")
     render_hero(
         "Assistente Auditor",
-        "Consulte o histórico contratual com respostas objetivas, filtros inteligentes e visão executiva.",
+        "Consulte o histórico contratual com respostas objetivas, visão executiva e navegação simples.",
     )
 
     contratos = carregar_contratos_chat()
     if contratos.empty:
-        st.markdown('<div class="mgmt-empty"><strong>Base ainda vazia</strong>O Assistente Auditor ficará disponível após a primeira análise salva.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mgmt-empty"><strong>Base ainda vazia</strong>'
+            'O Assistente Auditor ficará disponível após a primeira análise salva.</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
         st.stop()
 
-    def texto_tem(texto, palavras):
-        texto = str(texto or "").lower()
-        return any(p in texto for p in palavras)
+    def texto_tem(texto: str, palavras: List[str]) -> bool:
+        base = str(texto or "").lower()
+        return any(p in base for p in palavras)
 
     def _garantir_colunas_chat(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         defaults = {
-            "fornecedor": "Não informado", "cnpj": "Não informado", "valor_total": "Não informado",
-            "vigencia": "Não informado", "status": "Não informado", "risco": "N/A", "score": 0,
-            "contrato_assinado": "Não informado", "modelo_ia": "Não informado", "tipo_origem": "Não informado",
-            "arquivo": "Não informado", "data_analise": "Não informado", "id": "",
+            "fornecedor": "Não informado",
+            "cnpj": "Não informado",
+            "valor_total": "Não informado",
+            "vigencia": "Não informado",
+            "status": "Não informado",
+            "risco": "N/A",
+            "score": 0,
+            "contrato_assinado": "Não informado",
+            "modelo_ia": "Não informado",
+            "tipo_origem": "Não informado",
+            "arquivo": "Não informado",
+            "data_analise": "Não informado",
+            "id": "",
         }
         for col, default in defaults.items():
             if col not in df.columns:
                 df[col] = default
             df[col] = df[col].fillna(default)
-        df["risco_norm"] = df["risco"].astype(str).str.upper().str.strip().replace({"MEDIO": "MÉDIO"})
+
+        df["risco_norm"] = (
+            df["risco"].astype(str).str.upper().str.strip().replace({"MEDIO": "MÉDIO"})
+        )
         df["score_num"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
 
-        def _valor_num_chat(v):
+        def _valor_num_chat(v: Any) -> float:
             try:
                 parsed = _parse_moeda_brasil(v)
                 if parsed is not None:
-                    return parsed
+                    return float(parsed)
             except Exception:
                 pass
             txt = str(v or "").replace("R$", "").replace(" ", "")
@@ -9487,17 +9606,32 @@ if pagina == "🤖 Assistente IA":
         df["data_dt"] = pd.to_datetime(df["data_analise"], errors="coerce", dayfirst=True)
         return df
 
+    def _compactar_chat(valor: Any, limite: int = 180) -> str:
+        texto = clean_text(valor).strip()
+        if texto in {"", "Não localizado", "Não localizada", "None", "nan"}:
+            return "Não informado"
+        if len(texto) > limite:
+            return texto[: limite - 1].rstrip(" ,;:.") + "…"
+        return texto
+
     contratos = _garantir_colunas_chat(contratos)
     riscos = contratos["risco_norm"].astype(str)
     total_base = len(contratos)
     score_base = round(float(contratos["score_num"].mean()), 1) if total_base else 0
-    assinados_base = int(contratos["contrato_assinado"].astype(str).str.upper().str.strip().isin(["SIM", "ASSINADO", "VALIDADO"]).sum())
+    assinados_base = int(
+        contratos["contrato_assinado"]
+        .astype(str)
+        .str.upper()
+        .str.strip()
+        .isin(["SIM", "ASSINADO", "VALIDADO"])
+        .sum()
+    )
 
     st.markdown(
-        f'''
+        f"""
         <div class="ai-command-center">
             <h3>Central de consulta contratual</h3>
-            <p>O assistente consulta somente as análises registradas no histórico. As respostas não substituem a validação jurídica ou operacional.</p>
+            <p>Consulte somente dados já registrados no histórico. O assistente organiza a informação, mas não substitui validação jurídica ou operacional.</p>
             <div class="ai-base-grid">
                 <div class="ai-base-card"><small>Contratos disponíveis</small><strong>{total_base}</strong></div>
                 <div class="ai-base-card"><small>Risco alto</small><strong>{int((riscos == "ALTO").sum())}</strong></div>
@@ -9505,85 +9639,144 @@ if pagina == "🤖 Assistente IA":
                 <div class="ai-base-card"><small>Score médio</small><strong>{score_base}</strong></div>
             </div>
         </div>
-        ''',
+        """,
         unsafe_allow_html=True,
     )
 
-    exemplos = [
-        "Quantos contratos existem?", "Quais contratos são de risco alto?", "Quais contratos são de risco médio?",
-        "Quais contratos são de risco baixo?", "Qual contrato tem maior valor?", "Qual contrato tem menor valor?",
-        "Qual contrato tem menor score?", "Qual contrato tem maior score?", "Qual é o score médio?",
-        "Quais contratos estão assinados?", "Quais contratos não estão assinados?", "Quais contratos são do Projuris?",
-        "Quais contratos são do Ariba?", "Quais contratos foram analisados pelo Gemini?", "Liste os últimos contratos analisados",
-    ]
+    def _definir_pergunta_rapida(pergunta_pronta: str) -> None:
+        st.session_state["assistente_pergunta_input"] = pergunta_pronta
+        st.session_state["assistente_ultima_pergunta"] = pergunta_pronta
 
-    st.markdown('<div class="ai-quick-label">Consultas rápidas</div>', unsafe_allow_html=True)
+    def _limpar_consulta_ia() -> None:
+        st.session_state["assistente_pergunta_input"] = ""
+        st.session_state.pop("assistente_ultima_pergunta", None)
+
+    st.markdown(
+        """
+        <div class="ai-consult-shell">
+            <h3>Faça uma consulta</h3>
+            <p>Escolha uma pergunta rápida ou escreva diretamente o que deseja localizar na base contratual.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ai-quick-label">Perguntas rápidas</div>', unsafe_allow_html=True)
     q1, q2, q3, q4 = st.columns(4)
-    pergunta_botao = None
-    if q1.button("🚨 Risco alto", use_container_width=True, key="ai_quick_risco_alto"):
-        pergunta_botao = "Quais contratos são de risco alto?"
-    if q2.button("📉 Menor score", use_container_width=True, key="ai_quick_menor_score"):
-        pergunta_botao = "Qual contrato tem menor score?"
-    if q3.button("✍️ Não assinados", use_container_width=True, key="ai_quick_nao_assinados"):
-        pergunta_botao = "Quais contratos não estão assinados?"
-    if q4.button("🕘 Últimos contratos", use_container_width=True, key="ai_quick_ultimos"):
-        pergunta_botao = "Liste os últimos contratos analisados"
+    q1.button(
+        "🚨 Contratos de risco alto",
+        use_container_width=True,
+        key="ai_quick_risco_alto",
+        on_click=_definir_pergunta_rapida,
+        args=("Quais contratos são de risco alto?",),
+    )
+    q2.button(
+        "📉 Contrato com menor score",
+        use_container_width=True,
+        key="ai_quick_menor_score",
+        on_click=_definir_pergunta_rapida,
+        args=("Qual contrato tem menor score?",),
+    )
+    q3.button(
+        "✍️ Contratos não assinados",
+        use_container_width=True,
+        key="ai_quick_nao_assinados",
+        on_click=_definir_pergunta_rapida,
+        args=("Quais contratos não estão assinados?",),
+    )
+    q4.button(
+        "🕘 Últimos contratos",
+        use_container_width=True,
+        key="ai_quick_ultimos",
+        on_click=_definir_pergunta_rapida,
+        args=("Liste os últimos contratos analisados",),
+    )
 
-    escolha_col, limpar_col = st.columns([4, 1])
-    with escolha_col:
-        pergunta_exemplo = st.selectbox(
-            "Pergunta pronta",
-            exemplos,
-            index=None,
-            placeholder="Selecione uma pergunta pronta...",
-            key="assistente_ia_pergunta_pronta",
+    pergunta_col, consultar_col, limpar_col = st.columns([4.8, 1, 1])
+    with pergunta_col:
+        st.text_input(
+            "Pergunta",
+            placeholder="Ex.: Quais contratos são do Projuris? Qual possui menor score?",
+            key="assistente_pergunta_input",
             label_visibility="collapsed",
         )
+    with consultar_col:
+        consultar = st.button(
+            "Consultar",
+            type="primary",
+            use_container_width=True,
+            key="assistente_consultar",
+        )
     with limpar_col:
-        if st.button("Limpar consulta", use_container_width=True, key="assistente_limpar_consulta"):
-            st.session_state.pop("assistente_ultima_pergunta", None)
-            st.session_state.pop("assistente_ia_pergunta_pronta", None)
-            st.rerun()
+        st.button(
+            "Limpar",
+            use_container_width=True,
+            key="assistente_limpar_consulta",
+            on_click=_limpar_consulta_ia,
+        )
 
-    pergunta_digitada = st.chat_input("Digite sua pergunta sobre os contratos analisados...")
-    pergunta_nova = (pergunta_digitada or pergunta_botao or pergunta_exemplo or "").strip()
-    if pergunta_nova:
-        st.session_state["assistente_ultima_pergunta"] = pergunta_nova
+    if consultar:
+        pergunta_digitada = str(st.session_state.get("assistente_pergunta_input", "")).strip()
+        if pergunta_digitada:
+            st.session_state["assistente_ultima_pergunta"] = pergunta_digitada
+        else:
+            st.warning("Digite uma pergunta antes de consultar.")
+
+    st.markdown(
+        '<div class="ai-input-note">Você pode pesquisar por risco, score, assinatura, origem, contraparte, CNPJ, arquivo, status ou modelo de IA.</div>',
+        unsafe_allow_html=True,
+    )
+
     pergunta = str(st.session_state.get("assistente_ultima_pergunta", "")).strip()
 
-    def _risco_style_chat(risco):
-        risco = normalize_risco(risco)
-        if risco == "ALTO":
+    def _risco_style_chat(risco: Any) -> tuple[str, str]:
+        risco_norm = normalize_risco(risco)
+        if risco_norm == "ALTO":
             return "#ff5a5f", "rgba(255,90,95,.14)"
-        if risco in ["MÉDIO", "MEDIO"]:
+        if risco_norm in ["MÉDIO", "MEDIO"]:
             return "#f59e0b", "rgba(245,158,11,.14)"
-        if risco == "BAIXO":
+        if risco_norm == "BAIXO":
             return "#22c55e", "rgba(34,197,94,.14)"
         return "#94a3b8", "rgba(148,163,184,.12)"
 
-    def _render_pergunta_ia(texto):
-        st.markdown(f'<div class="ai-question-card">Consulta: {safe(texto)}</div>', unsafe_allow_html=True)
-
-    def _render_texto_ia(titulo, texto):
-        texto_html = safe(texto).replace("\n", "<br>")
+    def _render_pergunta_ia(texto: str) -> None:
         st.markdown(
-            f'<div class="ai-panel"><div class="ai-answer-title">{safe(titulo)}</div><div class="ai-answer-text">{texto_html}</div></div>',
+            f'<div class="ai-question-card"><b>Consulta realizada:</b> {safe(texto)}</div>',
             unsafe_allow_html=True,
         )
 
-    def _render_resumo_ia(df: pd.DataFrame, titulo: str = "Resumo executivo"):
+    def _render_texto_ia(titulo: str, texto: str) -> None:
+        texto_html = safe(texto).replace("\n", "<br>")
+        st.markdown(
+            f'<div class="ai-panel"><div class="ai-answer-title">{safe(titulo)}</div>'
+            f'<div class="ai-answer-text">{texto_html}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    def _render_resumo_ia(df: pd.DataFrame, titulo: str = "Resumo executivo") -> None:
         if df.empty:
             st.markdown(
-                f'<div class="ai-panel"><div class="ai-answer-title">{safe(titulo)}</div><div class="ai-empty-box">Nenhum contrato encontrado para esta consulta.</div></div>',
+                f'<div class="ai-panel"><div class="ai-answer-title">{safe(titulo)}</div>'
+                '<div class="ai-empty-box">Nenhum contrato encontrado para esta consulta.</div></div>',
                 unsafe_allow_html=True,
             )
             return
+
         riscos_df = df["risco_norm"].astype(str)
-        score_medio = round(pd.to_numeric(df["score_num"], errors="coerce").fillna(0).mean(), 1)
-        valor_total = float(pd.to_numeric(df["valor_num"], errors="coerce").fillna(0).sum())
-        valor_fmt = _formatar_moeda_brasil(valor_total) if valor_total > 0 else "Não informado"
+        score_medio = round(
+            pd.to_numeric(df["score_num"], errors="coerce").fillna(0).mean(), 1
+        )
+        valor_total = float(
+            pd.to_numeric(df["valor_num"], errors="coerce").fillna(0).sum()
+        )
+        valor_fmt = (
+            _formatar_moeda_brasil(valor_total)
+            if valor_total > 0
+            else "Não informado"
+        )
+
         st.markdown(
-            f'''
+            f"""
             <div class="ai-panel">
                 <div class="ai-answer-title">{safe(titulo)}</div>
                 <div class="ai-summary-grid">
@@ -9593,120 +9786,305 @@ if pagina == "🤖 Assistente IA":
                     <div class="ai-summary-card"><small>Risco médio</small><strong>{int((riscos_df == "MÉDIO").sum())}</strong></div>
                     <div class="ai-summary-card"><small>Risco baixo</small><strong>{int((riscos_df == "BAIXO").sum())}</strong></div>
                 </div>
-                <div class="ai-mini-note">Valor somado dos registros encontrados: <b>{safe(valor_fmt)}</b>.</div>
+                <div class="ai-mini-note">Valor numérico somado dos registros encontrados: <b>{safe(valor_fmt)}</b>.</div>
             </div>
-            ''', unsafe_allow_html=True,
+            """,
+            unsafe_allow_html=True,
         )
 
-    def _render_lista_contratos_ia(df: pd.DataFrame, limite: int = 10):
+    def _render_lista_contratos_ia(df: pd.DataFrame, limite: int = 10) -> None:
         if df.empty:
             return
-        cards = []
+
+        cards: List[str] = []
         for _, r in df.head(limite).iterrows():
             cor, fundo = _risco_style_chat(r.get("risco"))
-            cards.append(f'''
-            <div class="ai-contract-card" style="--risk-color:{cor};--risk-bg:{fundo};">
-                <div class="ai-contract-title">{safe(r.get("fornecedor", "Não informado"))}</div>
-                <div class="ai-risk-badge">● RISCO {safe(r.get("risco", "N/A"))}</div>
-                <div class="ai-contract-grid">
-                    <div><div class="ai-info-label">CNPJ</div><div class="ai-info-value">{safe(r.get("cnpj"))}</div></div>
-                    <div><div class="ai-info-label">Score</div><div class="ai-info-value">{safe(r.get("score"))}</div></div>
-                    <div><div class="ai-info-label">Valor</div><div class="ai-info-value">{safe(r.get("valor_total"))}</div></div>
-                    <div><div class="ai-info-label">Status</div><div class="ai-info-value">{safe(r.get("status"))}</div></div>
-                    <div><div class="ai-info-label">Assinatura</div><div class="ai-info-value">{safe(r.get("contrato_assinado"))}</div></div>
-                    <div><div class="ai-info-label">Origem</div><div class="ai-info-value">{safe(r.get("tipo_origem"))}</div></div>
-                    <div><div class="ai-info-label">Modelo IA</div><div class="ai-info-value">{safe(r.get("modelo_ia"))}</div></div>
-                    <div><div class="ai-info-label">Data</div><div class="ai-info-value">{safe(r.get("data_analise"))}</div></div>
+            risco_exibicao = normalize_risco(r.get("risco")) or "N/A"
+            valor_exibicao = _compactar_chat(r.get("valor_total"), 190)
+            status_exibicao = _compactar_chat(r.get("status"), 100)
+            cards.append(
+                f"""
+                <div class="ai-contract-card" style="--risk-color:{cor};--risk-bg:{fundo};">
+                    <div class="ai-contract-top">
+                        <div class="ai-contract-title">{safe(r.get("fornecedor", "Não informado"))}</div>
+                        <div class="ai-risk-badge">Risco {safe(risco_exibicao)}</div>
+                    </div>
+                    <div class="ai-contract-grid">
+                        <div class="ai-contract-field"><div class="ai-info-label">CNPJ</div><div class="ai-info-value">{safe(r.get("cnpj"))}</div></div>
+                        <div class="ai-contract-field"><div class="ai-info-label">Score</div><div class="ai-info-value">{safe(r.get("score"))}</div></div>
+                        <div class="ai-contract-field"><div class="ai-info-label">Status</div><div class="ai-info-value">{safe(status_exibicao)}</div></div>
+                        <div class="ai-contract-field"><div class="ai-info-label">Assinatura</div><div class="ai-info-value">{safe(_normalizar_assinatura(r.get("contrato_assinado")))}</div></div>
+                    </div>
+                    <div class="ai-contract-financial">
+                        <small>Valor / referência financeira</small>
+                        <strong>{safe(valor_exibicao)}</strong>
+                    </div>
+                    <div class="ai-contract-footer">
+                        <span>{safe(r.get("tipo_origem"))} • {safe(r.get("modelo_ia"))}</span>
+                        <span>{safe(r.get("data_analise"))} • {safe(r.get("arquivo"))}</span>
+                    </div>
                 </div>
-                <div class="ai-mini-note">Arquivo: {safe(r.get("arquivo"))}</div>
-            </div>''')
-        if len(df) > limite:
-            cards.append(f'<div class="ai-mini-note">Exibindo {limite} de {len(df)} contratos. Refine a consulta para reduzir a lista.</div>')
-        st.markdown("\n".join(cards), unsafe_allow_html=True)
+                """
+            )
 
-    def _render_conjunto_ia(titulo: str, df_resultado: pd.DataFrame, limite: int = 10):
+        complemento = ""
+        if len(df) > limite:
+            complemento = (
+                f'<div class="ai-mini-note">Exibindo {limite} de {len(df)} contratos. '
+                'Refine a pergunta para reduzir a lista.</div>'
+            )
+
+        st.markdown(
+            f'<div class="ai-contract-list">{"".join(cards)}</div>{complemento}',
+            unsafe_allow_html=True,
+        )
+
+    def _render_conjunto_ia(
+        titulo: str, df_resultado: pd.DataFrame, limite: int = 10
+    ) -> None:
         _render_resumo_ia(df_resultado, titulo)
         _render_lista_contratos_ia(df_resultado, limite=limite)
 
-    def _render_um_contrato_ia(titulo: str, row: pd.Series):
-        _render_texto_ia(titulo, "Resultado encontrado abaixo.")
+    def _render_um_contrato_ia(titulo: str, row: pd.Series) -> None:
+        _render_texto_ia(titulo, "Resultado localizado no histórico.")
         _render_lista_contratos_ia(pd.DataFrame([row]), limite=1)
 
-    def _responder_ia(pergunta_original: str):
+    def _responder_ia(pergunta_original: str) -> None:
         df = contratos.copy()
         pergunta_lower = pergunta_original.lower().strip()
         _render_pergunta_ia(pergunta_original)
+
         try:
-            if texto_tem(pergunta_lower, ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]):
-                _render_texto_ia("Olá!", "Posso consultar quantidade, riscos, scores, valores, assinatura, origem, modelo de IA e histórico das análises.")
-            elif texto_tem(pergunta_lower, ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"]):
-                _render_texto_ia("Total de contratos", f"Existem {len(df)} contrato(s) cadastrados no histórico.")
+            if re.search(r"\b(oi|olá|ola|bom dia|boa tarde|boa noite)\b", pergunta_lower):
+                _render_texto_ia(
+                    "Olá!",
+                    "Posso consultar quantidade, riscos, scores, valores, assinatura, origem, modelo de IA e histórico das análises.",
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["quantos contratos", "total de contratos", "quantidade de contratos", "qtd contratos"],
+            ):
+                _render_texto_ia(
+                    "Total de contratos",
+                    f"Existem {len(df)} contrato(s) cadastrados no histórico.",
+                )
                 _render_resumo_ia(df)
             elif texto_tem(pergunta_lower, ["risco alto", "alto risco", "contratos alto"]):
-                _render_conjunto_ia("Contratos de risco alto", df[df["risco_norm"] == "ALTO"], limite=25)
-            elif texto_tem(pergunta_lower, ["risco médio", "risco medio", "médio risco", "medio risco"]):
-                _render_conjunto_ia("Contratos de risco médio", df[df["risco_norm"] == "MÉDIO"], limite=25)
+                _render_conjunto_ia(
+                    "Contratos de risco alto",
+                    df[df["risco_norm"] == "ALTO"],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["risco médio", "risco medio", "médio risco", "medio risco"],
+            ):
+                _render_conjunto_ia(
+                    "Contratos de risco médio",
+                    df[df["risco_norm"] == "MÉDIO"],
+                    limite=25,
+                )
             elif texto_tem(pergunta_lower, ["risco baixo", "baixo risco", "contratos baixo"]):
-                _render_conjunto_ia("Contratos de risco baixo", df[df["risco_norm"] == "BAIXO"], limite=25)
-            elif texto_tem(pergunta_lower, ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"]):
+                _render_conjunto_ia(
+                    "Contratos de risco baixo",
+                    df[df["risco_norm"] == "BAIXO"],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["maior valor", "valor mais alto", "contrato mais caro", "maior contrato"],
+            ):
                 base = df.sort_values("valor_num", ascending=False)
-                _render_um_contrato_ia("Contrato com maior valor", base.iloc[0]) if not base.empty else _render_texto_ia("Maior valor", "Nenhum contrato encontrado.")
-            elif texto_tem(pergunta_lower, ["menor valor", "valor mais baixo", "contrato mais barato"]):
+                if not base.empty and float(base.iloc[0]["valor_num"]) > 0:
+                    _render_um_contrato_ia("Contrato com maior valor", base.iloc[0])
+                else:
+                    _render_texto_ia(
+                        "Contrato com maior valor",
+                        "Nenhum contrato possui valor global numérico confirmado no histórico.",
+                    )
+            elif texto_tem(
+                pergunta_lower,
+                ["menor valor", "valor mais baixo", "contrato mais barato"],
+            ):
                 base = df[df["valor_num"] > 0].sort_values("valor_num", ascending=True)
-                _render_um_contrato_ia("Contrato com menor valor", base.iloc[0]) if not base.empty else _render_texto_ia("Menor valor", "Nenhum contrato com valor numérico localizado.")
-            elif texto_tem(pergunta_lower, ["menor score", "pior score", "menor nota", "pior contrato"]):
+                if not base.empty:
+                    _render_um_contrato_ia("Contrato com menor valor", base.iloc[0])
+                else:
+                    _render_texto_ia(
+                        "Contrato com menor valor",
+                        "Nenhum contrato com valor global numérico foi localizado.",
+                    )
+            elif texto_tem(
+                pergunta_lower,
+                ["menor score", "pior score", "menor nota", "pior contrato"],
+            ):
                 base = df.sort_values("score_num", ascending=True)
-                _render_um_contrato_ia("Contrato com menor score", base.iloc[0]) if not base.empty else _render_texto_ia("Menor score", "Nenhum contrato encontrado.")
-            elif texto_tem(pergunta_lower, ["maior score", "melhor score", "maior nota", "melhor contrato"]):
+                if not base.empty:
+                    _render_um_contrato_ia("Contrato com menor score", base.iloc[0])
+            elif texto_tem(
+                pergunta_lower,
+                ["maior score", "melhor score", "maior nota", "melhor contrato"],
+            ):
                 base = df.sort_values("score_num", ascending=False)
-                _render_um_contrato_ia("Contrato com maior score", base.iloc[0]) if not base.empty else _render_texto_ia("Maior score", "Nenhum contrato encontrado.")
-            elif texto_tem(pergunta_lower, ["score médio", "score medio", "média de score", "media de score"]):
+                if not base.empty:
+                    _render_um_contrato_ia("Contrato com maior score", base.iloc[0])
+            elif texto_tem(
+                pergunta_lower,
+                ["score médio", "score medio", "média de score", "media de score"],
+            ):
                 media = round(float(df["score_num"].mean()), 1) if not df.empty else 0
-                _render_texto_ia("Score médio", f"O score médio dos contratos é {media}.")
+                _render_texto_ia(
+                    "Score médio",
+                    f"O score médio dos contratos é {media}.",
+                )
                 _render_resumo_ia(df)
-            elif texto_tem(pergunta_lower, ["não assinados", "nao assinados", "sem assinatura", "não estão assinados", "nao estao assinados", "contrato não assinado", "contrato nao assinado"]):
+            elif texto_tem(
+                pergunta_lower,
+                [
+                    "não assinados",
+                    "nao assinados",
+                    "sem assinatura",
+                    "não estão assinados",
+                    "nao estao assinados",
+                    "contrato não assinado",
+                    "contrato nao assinado",
+                ],
+            ):
                 ass = df["contrato_assinado"].astype(str).str.upper().str.strip()
-                _render_conjunto_ia("Contratos não assinados", df[~ass.isin(["SIM", "ASSINADO", "VALIDADO"])], limite=25)
-            elif texto_tem(pergunta_lower, ["contratos assinados", "estão assinados", "estao assinados", "com assinatura", "contrato assinado"]):
+                _render_conjunto_ia(
+                    "Contratos não assinados",
+                    df[~ass.isin(["SIM", "ASSINADO", "VALIDADO"])],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                ["contratos assinados", "estão assinados", "estao assinados", "com assinatura", "contrato assinado"],
+            ):
                 ass = df["contrato_assinado"].astype(str).str.upper().str.strip()
-                _render_conjunto_ia("Contratos assinados", df[ass.isin(["SIM", "ASSINADO", "VALIDADO"])], limite=25)
-            elif texto_tem(pergunta_lower, ["projuris"]):
-                _render_conjunto_ia("Contratos do Projuris", df[df["tipo_origem"].astype(str).str.lower().str.contains("projuris", na=False)], limite=25)
-            elif texto_tem(pergunta_lower, ["ariba"]):
-                _render_conjunto_ia("Contratos do Ariba", df[df["tipo_origem"].astype(str).str.lower().str.contains("ariba", na=False)], limite=25)
-            elif texto_tem(pergunta_lower, ["gemini", "modelo ia", "inteligência artificial", "inteligencia artificial", "analisados pela ia", "analisados pelo gemini"]) or re.search(r"\bia\b", pergunta_lower):
-                _render_conjunto_ia("Contratos analisados pelo Gemini", df[df["modelo_ia"].astype(str).str.lower().str.contains("gemini", na=False)], limite=25)
-            elif texto_tem(pergunta_lower, ["últimos", "ultimos", "recentes", "últimas análises", "ultimas analises", "últimos contratos", "ultimos contratos"]):
-                ultimos = df.sort_values(["data_dt", "id"], ascending=[False, False], na_position="last").head(10)
+                _render_conjunto_ia(
+                    "Contratos assinados",
+                    df[ass.isin(["SIM", "ASSINADO", "VALIDADO"])],
+                    limite=25,
+                )
+            elif "projuris" in pergunta_lower:
+                _render_conjunto_ia(
+                    "Contratos do Projuris",
+                    df[
+                        df["tipo_origem"]
+                        .astype(str)
+                        .str.lower()
+                        .str.contains("projuris", na=False)
+                    ],
+                    limite=25,
+                )
+            elif "ariba" in pergunta_lower:
+                _render_conjunto_ia(
+                    "Contratos do Ariba",
+                    df[
+                        df["tipo_origem"]
+                        .astype(str)
+                        .str.lower()
+                        .str.contains("ariba", na=False)
+                    ],
+                    limite=25,
+                )
+            elif (
+                texto_tem(
+                    pergunta_lower,
+                    [
+                        "gemini",
+                        "modelo ia",
+                        "inteligência artificial",
+                        "inteligencia artificial",
+                        "analisados pela ia",
+                        "analisados pelo gemini",
+                    ],
+                )
+                or re.search(r"\bia\b", pergunta_lower)
+            ):
+                _render_conjunto_ia(
+                    "Contratos analisados pelo Gemini",
+                    df[
+                        df["modelo_ia"]
+                        .astype(str)
+                        .str.lower()
+                        .str.contains("gemini", na=False)
+                    ],
+                    limite=25,
+                )
+            elif texto_tem(
+                pergunta_lower,
+                [
+                    "últimos",
+                    "ultimos",
+                    "recentes",
+                    "últimas análises",
+                    "ultimas analises",
+                    "últimos contratos",
+                    "ultimos contratos",
+                ],
+            ):
+                ultimos = df.sort_values(
+                    ["data_dt", "id"],
+                    ascending=[False, False],
+                    na_position="last",
+                ).head(10)
                 _render_conjunto_ia("Últimos contratos analisados", ultimos, limite=10)
             else:
                 busca = pergunta_lower
-                cols = ["fornecedor", "cnpj", "valor_total", "vigencia", "status", "risco", "contrato_assinado", "modelo_ia", "tipo_origem", "arquivo", "data_analise"]
+                cols = [
+                    "fornecedor",
+                    "cnpj",
+                    "valor_total",
+                    "vigencia",
+                    "status",
+                    "risco",
+                    "contrato_assinado",
+                    "modelo_ia",
+                    "tipo_origem",
+                    "arquivo",
+                    "data_analise",
+                ]
                 mask = pd.Series(False, index=df.index)
                 for col in cols:
-                    mask = mask | df[col].astype(str).str.lower().str.contains(busca, na=False, regex=False)
+                    mask = mask | df[col].astype(str).str.lower().str.contains(
+                        busca, na=False, regex=False
+                    )
                 resultado_busca = df[mask]
                 if resultado_busca.empty:
-                    _render_texto_ia("Nenhum resultado encontrado", "Pesquise por contraparte, CNPJ, valor, risco, status, assinatura, origem, modelo de IA ou nome do arquivo.")
+                    _render_texto_ia(
+                        "Nenhum resultado encontrado",
+                        "Tente pesquisar por contraparte, CNPJ, risco, status, assinatura, origem, modelo de IA ou nome do arquivo.",
+                    )
                 else:
-                    _render_conjunto_ia("Resultado da busca", resultado_busca, limite=50)
+                    _render_conjunto_ia(
+                        "Resultado da busca",
+                        resultado_busca,
+                        limite=50,
+                    )
         except Exception as erro:
-            _render_texto_ia("Erro ao consultar histórico", f"Ocorreu um erro ao consultar o histórico: {erro}")
+            _render_texto_ia(
+                "Erro ao consultar histórico",
+                f"Não foi possível concluir a consulta. Detalhe técnico: {erro}",
+            )
 
     if pergunta:
         _responder_ia(pergunta)
     else:
         st.markdown(
-            '''
+            """
             <div class="ai-guide-grid">
-                <div class="ai-guide-card"><b>Riscos e prioridades</b><span>Liste contratos de risco alto, médio ou baixo e identifique os registros que exigem revisão.</span></div>
-                <div class="ai-guide-card"><b>Valores e qualidade</b><span>Consulte maior ou menor valor, score médio e contratos com menor qualidade de extração.</span></div>
-                <div class="ai-guide-card"><b>Assinatura e origem</b><span>Localize contratos assinados, não validados, Projuris, Ariba ou analisados por determinado modelo.</span></div>
+                <div class="ai-guide-card"><b>Riscos e prioridades</b><span>Localize contratos de risco alto, médio ou baixo e identifique registros que exigem revisão.</span></div>
+                <div class="ai-guide-card"><b>Valores e qualidade</b><span>Consulte scores, valores globais confirmados e qualidade das análises registradas.</span></div>
+                <div class="ai-guide-card"><b>Assinatura e origem</b><span>Encontre contratos assinados, não validados, Projuris, Ariba ou processados por determinado modelo.</span></div>
             </div>
-            ''',
+            """,
             unsafe_allow_html=True,
         )
-        _render_texto_ia("Como consultar", "Use uma pergunta rápida, selecione uma consulta pronta ou escreva sua própria pergunta no campo inferior.")
+        _render_texto_ia(
+            "Pronto para consultar",
+            "Use uma das perguntas rápidas ou digite sua própria pergunta no campo acima.",
+        )
 
     st.markdown('<div class="footer">Auditor de Contratos - Grupo SBF • Suprimentos • Análise de Contratos</div>', unsafe_allow_html=True)
     st.stop()
@@ -10272,31 +10650,75 @@ if pagina == "📚 Histórico":
             cards_df = filtrado.head(25).copy()
             opcoes_detalhe = ["Não abrir análise completa"]
             mapa_detalhe: Dict[str, int] = {}
+
             for idx_card, (_, row_card) in enumerate(cards_df.iterrows()):
-                label = f"ID {clean_text(row_card.get('id'))} • {clean_text(row_card.get('fornecedor'))} • {clean_text(row_card.get('data_analise'))}"
+                label = (
+                    f"ID {clean_text(row_card.get('id'))} • "
+                    f"{clean_text(row_card.get('fornecedor'))} • "
+                    f"{clean_text(row_card.get('data_analise'))}"
+                )
                 opcoes_detalhe.append(label)
                 mapa_detalhe[label] = idx_card
+
+            def _solicitar_abertura_historico(label_selecionado: str) -> None:
+                # O botão do card grava uma solicitação. A seleção é aplicada
+                # no início do próximo rerun, antes de o selectbox ser criado.
+                st.session_state["hist_detalhe_pendente"] = label_selecionado
+
+            detalhe_pendente = st.session_state.pop("hist_detalhe_pendente", None)
+            if detalhe_pendente in opcoes_detalhe:
+                st.session_state["hist_contrato_detalhado"] = detalhe_pendente
+
+            detalhe_atual = st.session_state.get(
+                "hist_contrato_detalhado",
+                "Não abrir análise completa",
+            )
+            if detalhe_atual not in opcoes_detalhe:
+                st.session_state["hist_contrato_detalhado"] = "Não abrir análise completa"
 
             detalhe_escolhido = st.selectbox(
                 "Abrir análise completa",
                 opcoes_detalhe,
-                index=0,
                 key="hist_contrato_detalhado",
-                help="Apenas o contrato selecionado é carregado em detalhes, mantendo a página rápida.",
+                help="Selecione um contrato ou use o botão existente em cada card.",
             )
-
-            for _, row in cards_df.iterrows():
-                st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
-
-            if len(filtrado) > 25:
-                st.info("Exibindo os 25 primeiros registros filtrados. Use os filtros ou a tabela executiva para consultar os demais.")
 
             if detalhe_escolhido != "Não abrir análise completa":
                 posicao = mapa_detalhe.get(detalhe_escolhido)
                 if posicao is not None:
                     row_detalhe = cards_df.iloc[posicao]
-                    st.markdown('<div class="mgmt-section-head"><div><h2>Análise completa selecionada</h2><p>Detalhamento documental, financeiro e técnico do contrato escolhido.</p></div></div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="history-selected-shell">'
+                        '<h3>Análise completa selecionada</h3>'
+                        '<p>O detalhamento do contrato escolhido está aberto abaixo. '
+                        'Use o seletor acima para trocar de registro.</p>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
                     render_analise_completa_historico(row_detalhe)
+
+            st.markdown(
+                '<div class="mgmt-section-head"><div><h2>Cards encontrados</h2>'
+                '<p>Resumo executivo de cada análise filtrada.</p></div></div>',
+                unsafe_allow_html=True,
+            )
+
+            for idx_card, (_, row) in enumerate(cards_df.iterrows()):
+                label_card = opcoes_detalhe[idx_card + 1]
+                st.markdown(render_historico_card_executivo(row), unsafe_allow_html=True)
+                st.button(
+                    "🔎 Abrir análise completa deste contrato",
+                    use_container_width=True,
+                    key=f"hist_abrir_card_{clean_text(row.get('id'))}_{idx_card}",
+                    on_click=_solicitar_abertura_historico,
+                    args=(label_card,),
+                )
+
+            if len(filtrado) > 25:
+                st.info(
+                    "Exibindo os 25 primeiros registros filtrados. "
+                    "Use os filtros ou a tabela executiva para consultar os demais."
+                )
         with tab_tabela:
             st.dataframe(
                 export_df, use_container_width=True, hide_index=True,
